@@ -17,11 +17,8 @@ genson
 pymongo
 python-jose[cryptography]
 python-multipart
-langchain
-langchain_experimental
 aioboto3 # For async AWS if needed later, good practice
 structlog # For structured logging
 starlette-context
 werkzeug
 # Add this for jsonformer if not in langchain
-jsonformer 

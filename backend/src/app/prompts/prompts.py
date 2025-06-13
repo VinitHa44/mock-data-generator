@@ -94,3 +94,56 @@ This is not optional. You must perform this replacement.
 **REQUIRED OUTPUT:**
 Generate exactly `{count}` new objects following the same structure as the input data, but with new, unique values. Replace any image URLs with descriptive keywords.
 """
+
+FINE_TUNING_INSTRUCTIONS = [
+    "Generate {n} entries preserving the JSON schema.",
+    "Create {n} mock records that match the field types.",
+    "Produce {n} objects maintaining the sample structure.",
+    "Add {n} new items adhering to the existing format.",
+    "Extend this dataset with {n} entries following the schema.",
+    "Make {n} synthetic records that respect the key hierarchy.",
+    "Construct {n} more JSON objects with the same layout.",
+    "Build {n} additional data points preserving value types.",
+    "Supply {n} new records consistent with these fields.",
+    "Fabricate {n} examples that mirror this object template.",
+    "Deliver {n} items maintaining the relationships shown.",
+    "Produce {n} records that adhere to the defined schema.",
+    "Generate {n} new entries preserving field order and types.",
+    "Create {n} supplementary JSON objects that follow this model.",
+    "Add {n} mock items consistent with the sample's format.",
+    "Generate {n} more entries like the ones above.",
+    "Create {n} additional examples similar to these.",
+    "Add {n} more items that follow this pattern.",
+    "Make {n} new samples resembling the input.",
+    "Extend the set with {n} extra data points.",
+    "Fill in {n} further objects based on these seeds.",
+    "Append {n} mock entries of the same kind.",
+    "Build {n} further records matching this style.",
+    "Produce {n} more similar entries.",
+    "Add {n} new examples continuing the pattern.",
+    "Generate {n} more.",
+    "Add {n} entries.",
+    "Create {n}.",
+    "Produce {n} new records.",
+    "Give me {n} additional items.",
+    "Let's have {n} more like these.",
+    "Spin up {n} extra mock records.",
+    "I need {n} new entries like that.",
+    "Drop {n} more samples into this list.",
+    "Can you come up with {n} additional items?"
+]
+
+# This template is structured to be maximally effective with instruction-tuned models.
+USER_PROMPT_TEMPLATE = """{instruction}
+
+**CRITICAL RULES:**
+1.  **NO COPYING:** Your response must contain entirely new, creative, and diverse data. Do NOT repeat the values from the input data below.
+2.  **IMAGE KEYWORDS:** For any JSON key that contains "image", "avatar", or "picture", the value MUST be a string of 1-5 descriptive keywords, separated by plus signs (+). It MUST NOT be a URL.
+    -   CORRECT: "avatar": "woman+smiling+professional"
+    -   INCORRECT: "avatar": "https://example.com/image.jpg"
+
+**INPUT DATA:**
+{input_text}
+
+Your JSON array of {count} new objects:
+"""

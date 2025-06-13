@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Tuple
 from app.config.settings import settings
 from app.services.cache_service import cache_service
 from app.services.llm_service import llm_service
+from app.services.id_generation_service import IdGenerationService
 from app.services.image_enrichment_service import image_enrichment_service
 from app.repositories.log_repository import log_repository
 from app.usecases.generation_helpers import compute_hashes_for_payload
@@ -15,6 +16,9 @@ from app.utils.app_exceptions import InsufficientDataError, LLMGenerationError
 logger = get_logger(__name__)
 
 class GenerateMockDataUsecase:
+
+    def __init__(self):
+        self.id_generation_service = IdGenerationService()
 
     def _save_intermediate_step(self, data: Any, file_prefix: str, request_id: str):
         """Saves intermediate data to a file for debugging."""
@@ -96,19 +100,22 @@ class GenerateMockDataUsecase:
         
         raw_mock_data = await self._generate_and_validate_data(input_examples, count, request_id)
 
-        # 3. Enrich Data (Image URLs)
-        if not raw_mock_data:
+        # 3. Post-process to ensure unique and pattern-preserved IDs
+        processed_data = self.id_generation_service.process_and_replace_ids(raw_mock_data, input_examples)
+
+        # 4. Enrich Data (Image URLs)
+        if not processed_data:
             raise LLMGenerationError("Failed to generate any data from the LLM.")
         
-        image_keys = image_enrichment_service.find_image_url_keys(input_examples[0], raw_mock_data[0])
-        final_mock_data = await image_enrichment_service.enrich_mock_data(raw_mock_data, image_keys)
+        image_keys = image_enrichment_service.find_image_url_keys(input_examples[0], processed_data[0])
+        final_mock_data = await image_enrichment_service.enrich_mock_data(processed_data, image_keys)
         
         self._save_intermediate_step(final_mock_data, "final_response", request_id)
 
-        # 4. Cache the new data
+        # 5. Cache the new data
         await cache_service.create_new_group_cache(object_hashes, final_mock_data)
 
-        # 5. Log token usage (simplified)
+        # 6. Log token usage (simplified)
         # A real implementation would get exact token counts from the tokenizer
         input_tokens = len(json.dumps(input_examples)) // 2 
         output_tokens = len(json.dumps(final_mock_data)) // 2
