@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 @api_error_handler
 async def generate_mock_data(
     payload: List[Dict[str, Any]],
-    count: int = Query(10, ge=1, le=100, description="The desired number of mock data entries to generate.")
+    count: int = Query(10, ge=1, le=500, description="The desired number of mock data entries to generate.")
 ):
     """
     Generate mock data based on a list of JSON object examples.

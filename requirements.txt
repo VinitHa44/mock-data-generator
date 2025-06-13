@@ -20,3 +20,15 @@ bcrypt
 pyjwt
 loguru
 httpx 
+bitsandbytes
+peft
+datasets
+sentencepiece
+huggingface_hub
+genson
+python-jose[cryptography]
+python-multipart
+aioboto3
+structlog
+starlette-context
+werkzeug

@@ -3,3 +3,6 @@
 intermediate_steps
 inference.py
 instruction_tuner.py
+.DS_Store
+node_modules
+.env

@@ -6,8 +6,6 @@ from threading import Lock
 
 logger = get_logger(__name__)
 
-MODEL_SERVER_URL = "http://localhost:8001"
-
 class ModerationService:
     _instance = None
     _lock = Lock()
@@ -24,7 +22,7 @@ class ModerationService:
             with self._lock:
                 if not hasattr(self, 'initialized'):
                     logger.info("Initializing ModerationService...")
-                    self.client = httpx.AsyncClient(base_url=MODEL_SERVER_URL, timeout=30.0)
+                    self.client = httpx.AsyncClient(base_url=settings.MODEL_SERVER_URL, timeout=30.0)
                     self.initialized = True
                     logger.info("ModerationService initialized successfully.")
 

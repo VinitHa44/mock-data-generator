@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     MONGO_URI: str = "mongodb://localhost:27017/"
     MONGO_DB_NAME: str = "mdg_logs"
     OPENVERSE_API_URL: str = "https://api.openverse.org/v1/images/"
+    MODEL_SERVER_URL: str = "http://localhost:8001"
 
     # Caching
     CACHE_GROUP_HASH_LIMIT: int = 50  # k-entry limit for hashes in a group

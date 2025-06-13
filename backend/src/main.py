@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import settings
 from app.routers import generation_router
 from app.utils.logging_config import setup_logging
@@ -33,7 +34,16 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add middlewares
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # React development server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add other middlewares
 app.add_middleware(RateLimitingMiddleware)
 app.add_middleware(RequestValidationMiddleware)
 
@@ -41,10 +51,10 @@ app.add_middleware(RequestValidationMiddleware)
 # Include routers
 app.include_router(generation_router.router, prefix=settings.API_PREFIX)
 
-@app.get("/", tags=["Health Check"])
+@app.get(f"{settings.API_PREFIX}/", tags=["Health Check"])
 async def root():
     return {"status": "ok", "message": "Welcome to the Mock Data Generator API"}
 
-@app.get("/health", tags=["Health Check"])
+@app.get(f"{settings.API_PREFIX}/health", tags=["Health Check"])
 async def health_check():
     return {"status": "ok"}
