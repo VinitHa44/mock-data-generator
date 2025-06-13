@@ -1,7 +1,9 @@
 import httpx
 import random
-from typing import List, Dict, Any, Set
+import re
+from typing import List, Dict, Any
 from urllib.parse import urlparse
+from pathlib import Path
 from app.config.settings import settings
 from app.utils.logging_config import get_logger
 from app.utils.app_exceptions import ExternalAPIError
@@ -12,36 +14,83 @@ class ImageEnrichmentService:
     def __init__(self):
         self.api_url = settings.OPENVERSE_API_URL
         self.used_urls = set()
+        self.image_keys = [
+            'image', 'img', 'picture', 'photo', 'pic', 'avatar', 'thumbnail', 'logo',
+            'image_url', 'img_url', 'photo_url', 'avatar_url', 'logo_url', 'profile_pic',
+            'gallery'
+        ]
+        self.image_url_patterns = ['images.unsplash.com', 'pexels.com', 'pixabay.com']
+        self.image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']
 
-    def _is_url(self, text: str) -> bool:
-        """Check if a string is a valid URL."""
-        if not isinstance(text, str):
+    def _is_potential_image_url(self, key: str, value: Any) -> bool:
+        """
+        Determines if a value is likely an image URL based on its key,
+        value content, or file extension.
+        """
+        if not isinstance(value, str) or not value.lower().startswith(('http://', 'https://')):
             return False
+
+        key_lower = key.lower()
+        if any(k in key_lower for k in self.image_keys):
+            return True
+
+        if any(pattern in value for pattern in self.image_url_patterns):
+            return True
+        
+        # Check for image file extensions
+        path = urlparse(value).path
+        if any(path.lower().endswith(ext) for ext in self.image_extensions):
+            return True
+
+        return False
+
+    def _extract_keywords_from_url(self, url: str) -> str:
+        """
+        Extracts descriptive keywords from a URL path by analyzing its components,
+        preferring meaningful directory names over generic filenames.
+        """
         try:
-            result = urlparse(text)
-            return all([result.scheme, result.netloc])
-        except:
-            return False
+            p = Path(urlparse(url).path)
+            parts = [part for part in p.parts if part != '/']
+            
+            if not parts:
+                return "random"
 
-    def _is_keyword_string(self, text: str) -> bool:
-        """Check if a string is a '+' delimited keyword string."""
-        return isinstance(text, str) and '+' in text and not self._is_url(text)
+            filename = parts[-1]
+            file_stem = Path(filename).stem
+            
+            potential_keywords = parts[:-1]
+            
+            generic_dirs = {'images', 'assets', 'static', 'uploads', 'content', 'v1', 'v2', 'v3', 'media'}
+            meaningful_dirs = [d for d in potential_keywords if d.lower() not in generic_dirs]
+            
+            if meaningful_dirs:
+                keyword = meaningful_dirs[-1]
+            elif not file_stem.isdigit() and file_stem:
+                keyword = file_stem
+            else:
+                keyword = "photo" # Fallback for non-descriptive URLs
+            
+            return re.sub(r'[\-_]', ' ', keyword).strip()
+        except Exception:
+            return "random"
 
     async def _fetch_image_url_from_openverse(self, keywords: str) -> str:
         """Fetch a random image URL from Openverse for the given keywords."""
+        query = keywords if keywords else "random"
+        logger.info("Fetching image from Openverse API", keywords=query)
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.api_url}?format=json&q={keywords}")
+                response = await client.get(f"{self.api_url}?format=json&q={query}")
                 response.raise_for_status()
                 data = response.json()
                 
                 results = data.get("results", [])
                 if not results:
-                    logger.warning("No image results found for keywords", keywords=keywords)
-                    return "https://via.placeholder.com/150" # Return a placeholder
+                    logger.warning("No image results found for keywords", keywords=query)
+                    return "https://via.placeholder.com/150"
 
-                # Try to find a new URL
-                possible_urls = [res["url"] for res in results[:20]]
+                possible_urls = [res["url"] for res in results if "url" in res]
                 random.shuffle(possible_urls)
                 
                 for url in possible_urls:
@@ -49,63 +98,41 @@ class ImageEnrichmentService:
                         self.used_urls.add(url)
                         return url
 
-                # If all are used, just return one of them
                 return random.choice(possible_urls) if possible_urls else "https://via.placeholder.com/150"
 
         except httpx.HTTPStatusError as e:
-            logger.error("Openverse API request failed", status_code=e.response.status_code, keywords=keywords)
-            raise ExternalAPIError("Failed to fetch image from Openverse API.")
+            logger.error("Openverse API request failed", status_code=e.response.status_code, keywords=query)
+            return "https://via.placeholder.com/150" # Return placeholder on error
         except Exception as e:
             logger.error("An unexpected error occurred during Openverse API call", error=str(e))
-            raise ExternalAPIError("An unexpected error occurred while fetching image data.")
+            return "https://via.placeholder.com/150"
 
-    def find_image_url_keys(self, input_example: Dict[str, Any], output_example: Dict[str, Any]) -> Set[str]:
+    async def _traverse_and_enrich(self, data: Any, parent_key: str = "") -> Any:
         """
-        Identify keys that should be image URLs by comparing an input object
-        with a generated output object.
-        A key is considered an image URL key if its value in the input is a URL
-        and its value in the output is a keyword string.
+        Recursively traverses the data structure, passing down the parent key
+        to correctly identify and enrich image URLs, even within lists.
         """
-        image_keys = set()
-        
-        # Check top-level keys
-        for key in input_example.keys():
-            if key in output_example:
-                input_value = input_example[key]
-                output_value = output_example[key]
-                
-                if self._is_url(input_value) and self._is_keyword_string(output_value):
-                    image_keys.add(key)
-        
-        # Also check nested dictionaries
-        for key, value in input_example.items():
-            if isinstance(value, dict) and key in output_example and isinstance(output_example[key], dict):
-                nested_keys = self.find_image_url_keys(value, output_example[key])
-                for nested_key in nested_keys:
-                    # Store nested keys in a format like "parent.child"
-                    image_keys.add(f"{key}.{nested_key}")
+        if isinstance(data, dict):
+            return {key: await self._traverse_and_enrich(value, parent_key=key) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [await self._traverse_and_enrich(item, parent_key=parent_key) for item in data]
+        elif isinstance(data, str):
+            if self._is_potential_image_url(parent_key, data):
+                keywords = self._extract_keywords_from_url(data)
+                return await self._fetch_image_url_from_openverse(keywords)
+            return data
+        else:
+            return data
 
-        if image_keys:
-            logger.info("Identified image URL keys for enrichment", keys=list(image_keys))
-        return image_keys
-
-    async def enrich_mock_data(self, mock_data: List[Dict[str, Any]], image_keys: Set[str]) -> List[Dict[str, Any]]:
+    async def enrich_mock_data(self, mock_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Iterate through mock data and replace keyword strings with real image URLs.
+        Recursively traverses the mock data, finds fields that look like image URLs,
+        and replaces them with real URLs from the Openverse API.
         """
-        if not image_keys:
-            return mock_data
-
-        enriched_data = []
-        for item in mock_data:
-            enriched_item = item.copy()
-            for key in image_keys:
-                if key in enriched_item and self._is_keyword_string(enriched_item[key]):
-                    keywords = enriched_item[key]
-                    image_url = await self._fetch_image_url_from_openverse(keywords)
-                    enriched_item[key] = image_url
-            enriched_data.append(enriched_item)
-        
+        logger.info("Starting image enrichment process...")
+        self.used_urls.clear() # Reset for each new batch
+        enriched_data = await self._traverse_and_enrich(mock_data)
+        logger.info("Image enrichment process completed.")
         return enriched_data
 
 # Singleton instance

@@ -4,12 +4,12 @@ import asyncio
 import functools
 import random
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set, Tuple
 
-from llama_cpp import Llama
+from llama_cpp import Llama, LlamaGrammar
 
 from app.config.settings import settings
-from app.prompts.prompts import USER_PROMPT_TEMPLATE, FINE_TUNING_INSTRUCTIONS
+from app.prompts.prompts import create_finetuned_prompt_content
 from app.utils.logging_config import get_logger
 from app.utils.app_exceptions import LLMGenerationError
 
@@ -23,91 +23,113 @@ class LLMInterface(ABC):
 class LocalLLMService(LLMInterface):
     _instance = None
     _llm = None
-    _user_prompt_template = USER_PROMPT_TEMPLATE
-    _fine_tuning_instructions = FINE_TUNING_INSTRUCTIONS
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def _get_schema_for_value(self, key: str, value: Any) -> Dict[str, Any]:
+    def _is_image_key(self, key: str) -> bool:
+        """Determines if a key likely refers to an image."""
+        key_lower = key.lower()
+        image_key_suffixes = [
+            'image', 'img', 'picture', 'photo', 'pic', 'avatar', 'thumbnail', 'logo',
+            'image_url', 'img_url', 'photo_url', 'avatar_url', 'logo_url', 'profile_pic'
+        ]
+        return any(key_lower.endswith(suffix) for suffix in image_key_suffixes)
+
+    def _build_gbnf_rule_for_value(
+        self,
+        key: str,
+        value: Any,
+        rules: Dict[str, str],
+        rule_name_prefix: str = ""
+    ) -> str:
         """
-        Recursively generates a JSON schema for a given value, with special
-        pattern enforcement for image-related fields.
+        Recursively builds GBNF rules for a given value, creating named, reusable
+        rules for complex types like objects and arrays to produce an efficient grammar.
         """
-        # First, handle structural types recursively.
+        value_type = type(value).__name__
+        rule_name = f"{rule_name_prefix}-{key}" if rule_name_prefix else key
+        
         if isinstance(value, dict):
-            properties = {k: self._get_schema_for_value(k, v) for k, v in value.items()}
-            return {"type": "object", "properties": properties, "required": list(value.keys())}
-        
-        if isinstance(value, list):
+            # For objects, create a new named rule.
+            obj_rule_name = f"{rule_name}-object"
+            if obj_rule_name not in rules:
+                # Add a placeholder to break recursion if the same object is nested.
+                rules[obj_rule_name] = "" 
+                properties = []
+                for i, (k, v) in enumerate(value.items()):
+                    separator = ' "," ws ' if i < len(value) - 1 else ''
+                    # Recursively get the rule for the property's value.
+                    value_rule = self._build_gbnf_rule_for_value(k, v, rules, rule_name_prefix=obj_rule_name)
+                    # JSON key must be a quoted string.
+                    properties.append(f'"\\"{k}\\"" ws ":" ws {value_rule}{separator}')
+                
+                # Define the object rule.
+                rules[obj_rule_name] = f'{obj_rule_name} ::= "{{" ws {"".join(properties)} "}}" ws'
+            return obj_rule_name
+
+        elif isinstance(value, list):
+            # For arrays, create a rule for its items.
             if not value:
-                return {"type": "array", "items": {}}
-            # Recurse on the first item, losing the parent key as it's not relevant for items in a list.
-            return {"type": "array", "items": self._get_schema_for_value("", value[0])}
-
-        # Now, handle primitive types and perform image detection only on strings.
-        if isinstance(value, str):
-            key_lower = key.lower()
-            val_lower = value.lower()
-
-            # --- Start of Image Field Detection Logic ---
-            is_image = False
-            key_triggers = ['image', 'img', 'picture', 'photo', 'pic', 'avatar', 'thumbnail', 'logo']
-            if any(trigger in key_lower for trigger in key_triggers):
-                is_image = True
-
-            if not is_image:
-                image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
-                if any(val_lower.endswith(ext) for ext in image_extensions):
-                    is_image = True
+                return '"[]" ws' # Handle empty arrays.
             
-            if not is_image:
-                url_keywords = ['/images/', '/photos/', 'unsplash.com', 'pexels.com', 'pixabay.com']
-                if any(keyword in val_lower for keyword in url_keywords):
-                    is_image = True
-            
-            if not is_image and key_lower.endswith(('_url', '_uri')):
-                 if any(kw in val_lower for kw in ['image', 'photo', 'picture']):
-                    is_image = True
-            # --- End of Image Field Detection Logic ---
+            # Assume all items in the array have the same structure as the first.
+            # Pass the original key 'key' instead of a derived key so that _is_image_key
+            # can be applied correctly to the items within the list.
+            item_rule_name = self._build_gbnf_rule_for_value(key, value[0], rules, rule_name_prefix=rule_name_prefix)
+            array_rule_name = f"array-of-{item_rule_name}"
 
-            if is_image:
-                return {
-                    "type": "string",
-                    "description": "A string of 1-5 keywords separated by plus signs.",
-                    "pattern": r"^([a-zA-Z_]+)(?:\+[a-zA-Z_]+){0,4}$"
-                }
-            
-            # Default for regular strings
-            return {"type": "string"}
+            # Define the array rule, referencing the item rule.
+            # This handles a variable number of items. For fixed-size, a different rule is needed.
+            if array_rule_name not in rules:
+                 rules[array_rule_name] = f'{array_rule_name} ::= "[" ws {item_rule_name} ("," ws {item_rule_name})* ws "]"'
+            return array_rule_name
 
-        if isinstance(value, int):
-            return {"type": "integer"}
-        if isinstance(value, float):
-            return {"type": "number"}
-        if isinstance(value, bool):
-            return {"type": "boolean"}
+        elif isinstance(value, str):
+            # All strings are handled by the 'string' rule now.
+            return "string"
+        elif isinstance(value, (int, float)):
+            return "number"
+        elif isinstance(value, bool):
+            return "boolean"
+        else:
+            # Fallback for null or other unexpected types.
+            return "null"
+
+    def _create_gbnf_grammar_from_sample(self, sample_data: Dict[str, Any], count: int) -> str:
+        """
+        Dynamically creates a GBNF grammar string from a sample data object. This
+        generates a structured and efficient grammar by creating named, reusable
+        rules for objects and arrays, preventing massive, inline rule definitions.
+        """
+        rules = {}
+        # Start building the grammar from the top-level 'item' structure.
+        item_rule_name = self._build_gbnf_rule_for_value("item", sample_data, rules)
+
+        # Define the root of the grammar, which expects a 'data' array.
+        root_and_data_array_rules = [
+            'root ::= "{" ws "\\"data\\":" ws data-array "}"',
+            # This rule enforces the exact number of items requested.
+            f'data-array ::= "[" ws {item_rule_name} ("," ws {item_rule_name}){{{count - 1}}} ws "]"'
+        ]
+
+        # Define primitive types that form the building blocks of the JSON.
+        primitive_rules = [
+            r'string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\"" ws',
+            r'number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws',
+            'boolean ::= ("true" | "false") ws',
+            'null ::= "null" ws',
+            'ws ::= [ \\t\\n]*'
+        ]
         
-        # Fallback for other types like None.
-        return {"type": "string"}
-
-    def _create_json_schema_from_sample(self, sample_data: Dict[str, Any], count: int) -> Dict[str, Any]:
-        """Dynamically creates a JSON schema, enforcing item count and image patterns."""
-        item_schema = self._get_schema_for_value("root", sample_data)
-        return {
-            "type": "object",
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": item_schema,
-                    "minItems": count,
-                    "maxItems": count
-                }
-            },
-            "required": ["data"]
-        }
+        # Combine the root, dynamically generated rules, and primitives into the final grammar.
+        # The dynamic rules are placed in the middle, as they may depend on primitives
+        # and are required by the root.
+        final_grammar = "\n".join(root_and_data_array_rules + list(rules.values()) + primitive_rules)
+        logger.debug(f"Generated GBNF Grammar:\n{final_grammar}")
+        return final_grammar
 
     async def initialize(self):
         if self._llm is None:
@@ -132,33 +154,25 @@ class LocalLLMService(LLMInterface):
 
     async def _run_generation(self, input_data: List[Dict], count: int) -> List[Dict]:
         await self.initialize()
-        
-        instruction_template = random.choice(self._fine_tuning_instructions)
-        instruction = instruction_template.format(n=count)
 
-        user_prompt_content = self._user_prompt_template.format(
-            instruction=instruction,
-            input_text=json.dumps(input_data, indent=2),
-            count=count
-        )
+        prompt_content = create_finetuned_prompt_content(input_data, count)
+        messages = [{"role": "user", "content": prompt_content}]
         
-        messages = [{"role": "user", "content": user_prompt_content}]
-        
-        json_schema = None
+        grammar = None
         if input_data:
             try:
-                json_schema = self._create_json_schema_from_sample(input_data[0], count)
-                logger.info("Successfully created JSON schema with item count and image pattern enforcement.")
+                # Use the new, robust GBNF grammar generation.
+                gbnf_string = self._create_gbnf_grammar_from_sample(input_data[0], count)
+                grammar = LlamaGrammar.from_string(gbnf_string, verbose=False)
+                logger.info("Successfully created GBNF grammar from sample data.")
             except Exception as e:
-                logger.warning(f"Could not create JSON schema: {e}", exc_info=True)
+                logger.warning(f"Could not create GBNF grammar: {e}", exc_info=True)
 
         max_tokens = -1
-        logger.info(f"Invoking GGUF model via Llama.cpp. Generating {count} items.", max_tokens=max_tokens)
+        logger.info(f"Invoking GGUF model via Llama.cpp with GBNF grammar. Generating {count} items.", max_tokens=max_tokens)
 
         try:
             loop = asyncio.get_running_loop()
-            
-            response_format = {"type": "json_object", "schema": json_schema} if json_schema else None
 
             llm_call = functools.partial(
                 self._llm.create_chat_completion,
@@ -167,7 +181,7 @@ class LocalLLMService(LLMInterface):
                 temperature=0.7,
                 top_p=0.95,
                 stop=["<|im_end|>"],
-                response_format=response_format,
+                grammar=grammar,
             )
             
             output = await loop.run_in_executor(None, llm_call)

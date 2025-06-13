@@ -107,8 +107,8 @@ class GenerateMockDataUsecase:
         if not processed_data:
             raise LLMGenerationError("Failed to generate any data from the LLM.")
         
-        image_keys = image_enrichment_service.find_image_url_keys(input_examples[0], processed_data[0])
-        final_mock_data = await image_enrichment_service.enrich_mock_data(processed_data, image_keys)
+        logger.info("Starting image URL enrichment post-processing.", request_id=request_id)
+        final_mock_data = await image_enrichment_service.enrich_mock_data(processed_data)
         
         self._save_intermediate_step(final_mock_data, "final_response", request_id)
 
