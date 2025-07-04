@@ -94,6 +94,18 @@ class Settings(BaseSettings):
         (r"^([a-zA-Z_]+):(\d+)$", ":"),
         (r"^([a-zA-Z_]+)_(\d+)$", "_"),
         (r"^([a-zA-Z_]+)\.(\d+)$", "."),
+        # Complex alphanumeric patterns
+        (r"^([a-zA-Z_]+):([a-zA-Z0-9\-]+)$", ":"),
+        (r"^([a-zA-Z_]+)-([a-zA-Z0-9\-]+)$", "-"),
+        (r"^([a-zA-Z_]+)_([a-zA-Z0-9\-]+)$", "_"),
+        (r"^([a-zA-Z_]+)\.([a-zA-Z0-9\-]+)$", "."),
+        # Date-based patterns
+        (r"^([a-zA-Z_]+)-(\d{4}-\d{2}-\d{2}-\d+)$", "-"),
+        (r"^([a-zA-Z_]+)-(\d{4}-Q\d-\d+)$", "-"),
+        (r"^([a-zA-Z_]+)_(\d{4}_\d{2}_\d{2}_\d+)$", "_"),
+        # Revision patterns
+        (r"^([a-zA-Z_]+)-(\d+)-([a-zA-Z0-9]+)$", "-"),
+        (r"^([a-zA-Z_]+)_(\d+)_([a-zA-Z0-9]+)$", "_"),
     ]
     ID_KEY_PATTERNS: list = ["id", "_id", "Id", "ID"]  # Keys that should be treated as IDs
 

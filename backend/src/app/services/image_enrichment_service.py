@@ -247,35 +247,32 @@ class ImageEnrichmentService:
                 if not possible_urls:
                     return None
 
-                random.shuffle(possible_urls)
-
                 # Separate unused and used URLs
                 unused_urls = [url for url in possible_urls if url not in self.used_urls]
                 used_urls = [url for url in possible_urls if url in self.used_urls]
 
-                # Validate URLs concurrently
+                # Try unused URLs first, one by one (limit to first 5 for speed)
                 if unused_urls:
-                    # Validate unused URLs first
-                    validation_results = await self._validate_urls_concurrently(unused_urls)
-                    valid_unused_urls = [url for url, is_valid in validation_results if is_valid]
-                    
-                    if valid_unused_urls:
-                        # Select first valid unused URL (not random)
-                        selected_url = valid_unused_urls[0]
-                        self.used_urls.add(selected_url)
-                        logger.info(f"Found valid unused URL: {selected_url}")
-                        return selected_url
+                    for url in unused_urls[:5]:  # Limit to first 5 URLs
+                        logger.info(f"Validating unused URL: {url}")
+                        is_valid = await self._validate_image_url(url)
+                        if is_valid:
+                            self.used_urls.add(url)
+                            logger.info(f"Found valid unused URL: {url}")
+                            return url
+                        else:
+                            logger.info(f"URL validation failed: {url}")
 
-                # If no valid unused URLs, try used URLs
+                # If no valid unused URLs, try used URLs one by one (limit to first 3)
                 if used_urls:
-                    validation_results = await self._validate_urls_concurrently(used_urls)
-                    valid_used_urls = [url for url, is_valid in validation_results if is_valid]
-                    
-                    if valid_used_urls:
-                        # Select first valid used URL (not random)
-                        selected_url = valid_used_urls[0]
-                        logger.info(f"Found valid URL (reused): {selected_url}")
-                        return selected_url
+                    for url in used_urls[:3]:  # Limit to first 3 URLs
+                        logger.info(f"Validating used URL: {url}")
+                        is_valid = await self._validate_image_url(url)
+                        if is_valid:
+                            logger.info(f"Found valid URL (reused): {url}")
+                            return url
+                        else:
+                            logger.info(f"URL validation failed: {url}")
 
                 logger.warning("No valid URLs found in Openverse results", keywords=query)
                 return None
@@ -296,8 +293,8 @@ class ImageEnrichmentService:
 
     async def _fetch_image_with_fallback(self, keyword_string: str) -> str:
         """
-        Fetches image using sequential keyword fallback strategy:
-        1. Try all keywords together
+        Fetches image using optimized keyword fallback strategy:
+        1. Try all keywords together - if first URL fails, move to next keyword combination
         2. If no results, try first (n-1) combination
         3. If no results, try next (n-1) combination
         4. Continue until all (n-1) combinations exhausted
@@ -311,8 +308,8 @@ class ImageEnrichmentService:
 
         keyword_combinations = self._generate_keyword_combinations(keywords)
         
-        # Try each combination sequentially in order
-        for combo in keyword_combinations:
+        # Try each combination sequentially in order (limit to first 3 for speed)
+        for combo in keyword_combinations[:3]:  # Limit to first 3 combinations
             logger.info(f"Trying keyword combination: {combo}")
             try:
                 image_url = await self._fetch_image_url_from_openverse(combo)
@@ -320,9 +317,11 @@ class ImageEnrichmentService:
                     logger.info(f"Found image for keywords: {combo}")
                     return image_url
                 else:
-                    logger.info(f"No valid images found for keywords: {combo}")
+                    logger.info(f"No valid images found for keywords: {combo}, moving to next combination")
+                    # Move to next keyword combination immediately
+                    continue
             except Exception as e:
-                logger.warning(f"Keyword combination failed: {combo}, error: {e}")
+                logger.warning(f"Keyword combination failed: {combo}, error: {e}, moving to next combination")
                 continue
 
         logger.warning("No images found for any keyword combination", keywords=keywords)
