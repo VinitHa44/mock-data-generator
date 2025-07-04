@@ -105,7 +105,7 @@ class GenerateMockDataUsecase:
         """
         total_generated_data = []
         attempts = 0
-        max_attempts = 3
+        max_attempts = settings.MAX_GENERATION_ATTEMPTS
 
         while len(total_generated_data) < count and attempts < max_attempts:
             remaining_count = count - len(total_generated_data)
@@ -116,6 +116,7 @@ class GenerateMockDataUsecase:
                 items_to_generate=remaining_count,
             )
 
+            # Use batch generation for better performance with large counts
             generated_data = await llm_service.generate_mock_data(
                 input_examples, remaining_count
             )

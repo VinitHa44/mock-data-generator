@@ -177,7 +177,7 @@ class IdProcessingService:
         return id_objects
 
     def combine_llm_response_with_ids(self, llm_response: List[Dict], id_objects: List[Dict]) -> List[Dict]:
-        """Combine LLM response with generated IDs."""
+        """Combine LLM response with generated IDs, placing ID fields at the top of each object."""
         logger.info(f"Combining LLM response ({len(llm_response)} items) with IDs ({len(id_objects)} items)")
         
         if len(llm_response) != len(id_objects):
@@ -188,16 +188,25 @@ class IdProcessingService:
             id_objects = id_objects[:min_count]
         
         def merge_recursive(llm_obj, id_obj):
-            """Recursively merge LLM object with ID object."""
+            """Recursively merge LLM object with ID object, placing ID fields at the top."""
             if isinstance(llm_obj, dict) and isinstance(id_obj, dict):
-                result = llm_obj.copy()
+                # Start with ID fields first (at the top)
+                result = {}
+                
+                # Add ID fields first
                 for key, value in id_obj.items():
-                    if key in result:
+                    if key in llm_obj:
                         # If both have the key, merge recursively
-                        result[key] = merge_recursive(result[key], value)
+                        result[key] = merge_recursive(llm_obj[key], value)
                     else:
                         # If only ID object has the key, add it
                         result[key] = value
+                
+                # Then add all LLM fields (non-ID fields)
+                for key, value in llm_obj.items():
+                    if key not in id_obj:  # Only add if not already added as ID field
+                        result[key] = value
+                
                 return result
             else:
                 # If one is not a dict, return the LLM object (preserve LLM data)
@@ -208,7 +217,7 @@ class IdProcessingService:
             combined_item = merge_recursive(llm_item, id_item)
             combined_data.append(combined_item)
         
-        logger.info(f"Successfully combined {len(combined_data)} items")
+        logger.info(f"Successfully combined {len(combined_data)} items with IDs at the top")
         return combined_data
 
 

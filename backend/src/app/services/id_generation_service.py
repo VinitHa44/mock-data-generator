@@ -1,6 +1,7 @@
 import re
 import uuid
 from typing import Any, Dict, List, Set, Tuple
+from app.config.settings import settings
 
 
 class IdPatternRecognizer:
@@ -22,13 +23,7 @@ class IdPatternRecognizer:
             return {"type": "digit_string"}
 
         # Regex for patterns like "user-123", "item_45", "order:789"
-        pattern_regexes: List[Tuple[str, str]] = [
-            (r"^([a-zA-Z_]+)(\d+)$", ""),
-            (r"^([a-zA-Z_]+)-(\d+)$", "-"),
-            (r"^([a-zA-Z_]+):(\d+)$", ":"),
-            (r"^([a-zA-Z_]+)_(\d+)$", "_"),
-            (r"^([a-zA-Z_]+)\.(\d+)$", "."),
-        ]
+        pattern_regexes: List[Tuple[str, str]] = settings.ID_PATTERN_REGEXES
 
         # Check for prefix-based numeric patterns
         for pattern_regex, separator in pattern_regexes:
@@ -69,8 +64,8 @@ class IdGenerationService:
         def discover_recursive(obj, path):
             if isinstance(obj, dict):
                 for key, value in obj.items():
-                    # Check if the key is 'id' or ends with '_id'
-                    if key.lower() == "id" or key.lower().endswith("_id"):
+                    # Check if the key matches ID patterns
+                    if any(key.lower().endswith(pattern) for pattern in settings.ID_KEY_PATTERNS):
                         current_path = f"{path}.{key}"
                         id_examples_by_path.setdefault(current_path, []).append(
                             value
@@ -149,7 +144,7 @@ class IdGenerationService:
             return {
                 key: (
                     self._generate_new_id(f"{path}.{key}")
-                    if (key.lower() == "id" or key.lower().endswith("_id"))
+                    if any(key.lower().endswith(pattern) for pattern in settings.ID_KEY_PATTERNS)
                     and f"{path}.{key}" in self.id_patterns
                     else self._replace_ids_recursive(value, f"{path}.{key}")
                 )

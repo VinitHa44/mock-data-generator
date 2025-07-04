@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+from app.config.settings import settings
 from app.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -6,15 +7,7 @@ logger = get_logger(__name__)
 
 class ImageKeyAnalyzerService:
     def __init__(self):
-        self.image_extensions = [
-            ".jpg",
-            ".jpeg", 
-            ".png",
-            ".gif",
-            ".bmp",
-            ".webp",
-            ".svg",
-        ]
+        self.image_extensions = settings.IMAGE_EXTENSIONS
 
     def _analyze_input_schema(self, input_data: Any, path: str = "") -> Dict[str, Any]:
         """

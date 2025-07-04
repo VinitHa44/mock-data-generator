@@ -69,10 +69,7 @@ class ImageEnrichmentService:
             path_parts = [part for part in path.split('/') if part]
             
             # Remove common/generic parts
-            generic_parts = {
-                'images', 'img', 'assets', 'static', 'uploads', 'content',
-                'v1', 'v2', 'v3', 'media', 'photos', 'pictures','examples','example','photo','photos','image','contents'
-            }
+            generic_parts = set(settings.GENERIC_URL_PARTS)
             
             # Filter out generic parts and empty strings
             meaningful_parts = [
@@ -84,7 +81,7 @@ class ImageEnrichmentService:
             if meaningful_parts:
                 last_part = meaningful_parts[-1]
                 # Remove common image extensions
-                for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']:
+                for ext in settings.IMAGE_EXTENSIONS:
                     if last_part.lower().endswith(ext):
                         last_part = last_part[:-len(ext)]
                         break
@@ -153,11 +150,11 @@ class ImageEnrichmentService:
         try:
             # Create client with SSL verification disabled for problematic domains
             ssl_verify = True
-            if any(domain in url.lower() for domain in ['flickr.com', 'staticflickr.com']):
+            if any(domain in url.lower() for domain in settings.DISABLE_SSL_DOMAINS):
                 ssl_verify = False
-                logger.info(f"Disabling SSL verification for Flickr URL: {url}")
+                logger.info(f"Disabling SSL verification for problematic domain: {url}")
             
-            async with httpx.AsyncClient(timeout=8.0, verify=ssl_verify) as client:
+            async with httpx.AsyncClient(timeout=settings.IMAGE_VALIDATION_TIMEOUT, verify=ssl_verify) as client:
                 # First check with HEAD request for content type
                 head_response = await client.head(url, follow_redirects=True)
                 if head_response.status_code != 200:
@@ -167,38 +164,25 @@ class ImageEnrichmentService:
                 content_type = head_response.headers.get('content-type', '').lower()
                 
                 # Check if content type indicates an image
-                if not any(img_type in content_type for img_type in ['image/', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg']):
+                if not any(img_type in content_type for img_type in settings.IMAGE_CONTENT_TYPES):
                     logger.warning(f"URL does not return image content type: {url}, content-type: {content_type}")
                     return False
                 
                 # Make a GET request to check actual content
-                get_response = await client.get(url, follow_redirects=True, timeout=10.0)
+                get_response = await client.get(url, follow_redirects=True, timeout=settings.IMAGE_FETCH_TIMEOUT)
                 if get_response.status_code != 200:
                     logger.warning(f"GET request failed for {url}, status: {get_response.status_code}")
                     return False
                 
                 # Check content type again from GET response
                 content_type = get_response.headers.get('content-type', '').lower()
-                if not any(img_type in content_type for img_type in ['image/', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg']):
+                if not any(img_type in content_type for img_type in settings.IMAGE_CONTENT_TYPES):
                     logger.warning(f"GET response does not return image content type: {url}, content-type: {content_type}")
                     return False
                 
                 # Check if response body contains error messages or non-image content
-                content = get_response.text[:500]  # Check first 500 characters
-                error_indicators = [
-                    "these aren't the droids you're looking for",
-                    "not found",
-                    "error",
-                    "page not found",
-                    "404",
-                    "forbidden",
-                    "access denied",
-                    "maintenance",
-                    "temporarily unavailable",
-                    "service unavailable",
-                    "bad request",
-                    "unauthorized"
-                ]
+                content = get_response.text[:settings.IMAGE_CONTENT_CHECK_SIZE]  # Check first N characters
+                error_indicators = settings.ERROR_INDICATORS
                 
                 content_lower = content.lower()
                 for indicator in error_indicators:
@@ -207,7 +191,7 @@ class ImageEnrichmentService:
                         return False
                 
                 # Check if content is too short (likely not an image)
-                if len(get_response.content) < 1000:  # Less than 1KB is suspicious
+                if len(get_response.content) < settings.MIN_IMAGE_SIZE_BYTES:  # Less than minimum size is suspicious
                     logger.warning(f"URL returns suspiciously small content: {url}, size: {len(get_response.content)} bytes")
                     return False
                 

@@ -60,7 +60,7 @@ class CacheService:
     async def save_bloom_filter_state(self):
         """Save bloom filter state to disk"""
         try:
-            with open('bloom_filter.pkl', 'wb') as f:
+            with open(settings.BLOOM_FILTER_FILE, 'wb') as f:
                 pickle.dump(self.bloom_filter, f)
             logger.info("Bloom filter state saved")
         except Exception as e:
@@ -69,8 +69,8 @@ class CacheService:
     async def load_bloom_filter_state(self):
         """Load bloom filter state from disk"""
         try:
-            if os.path.exists('bloom_filter.pkl'):
-                with open('bloom_filter.pkl', 'rb') as f:
+            if os.path.exists(settings.BLOOM_FILTER_FILE):
+                with open(settings.BLOOM_FILTER_FILE, 'rb') as f:
                     self.bloom_filter = pickle.load(f)
                 logger.info("Bloom filter state loaded from disk")
         except Exception as e:
