@@ -1,21 +1,26 @@
-from pydantic_settings import BaseSettings
 import os
+
+from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     """
     Application settings.
     You can override these values by creating a .env file in the root directory.
     """
+
     # API settings
     PROJECT_NAME: str = "Mock Data Generator"
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
-    
+
     # LLM and Model Settings
     GGUF_MODEL_PATH: str = "model/phi35-finetuned-Q4_K_M.gguf"
     MODERATION_MODEL: str = "KoalaAI/Text-Moderation"
-    PROMPT_INJECTION_MODEL: str = "protectai/deberta-v3-base-prompt-injection-v2"
-    
+    PROMPT_INJECTION_MODEL: str = (
+        "protectai/deberta-v3-base-prompt-injection-v2"
+    )
+
     # Services
     REDIS_URL: str = "redis://localhost:6379"
     MONGO_URI: str = "mongodb://localhost:27017/"
@@ -25,7 +30,7 @@ class Settings(BaseSettings):
 
     # Caching
     CACHE_GROUP_HASH_LIMIT: int = 50  # k-entry limit for hashes in a group
-    
+
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_TIMEFRAME: int = 60  # in seconds
@@ -39,6 +44,7 @@ class Settings(BaseSettings):
         # To load from a .env file
         env_file = ".env"
         env_file_encoding = "utf-8"
+
 
 settings = Settings()
 

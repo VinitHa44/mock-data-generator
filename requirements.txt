@@ -32,3 +32,7 @@ aioboto3
 structlog
 starlette-context
 werkzeug
+autoflake
+isort
+black
+vulture

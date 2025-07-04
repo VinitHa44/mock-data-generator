@@ -1,5 +1,6 @@
 import json
 
+
 def create_finetuned_prompt_content(input_data: list[dict], count: int) -> str:
     """
     Creates a detailed and explicit prompt for the instruction-finetuned model
@@ -20,9 +21,6 @@ def create_finetuned_prompt_content(input_data: list[dict], count: int) -> str:
     input_text = json.dumps(input_data, indent=2)
 
     # Assemble the prompt content exactly as it was during training
-    prompt_content = (
-        f"{instruction}\n\n"
-        f"{input_text}"
-    )
+    prompt_content = f"{instruction}\n\n" f"{input_text}"
 
     return prompt_content

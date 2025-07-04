@@ -1,18 +1,25 @@
 import json
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import Response, JSONResponse
-from starlette.types import ASGIApp
+
 from app.services.moderation_service import moderation_service
 from app.utils.logging_config import get_logger
+from starlette.middleware.base import (
+    BaseHTTPMiddleware,
+    RequestResponseEndpoint,
+)
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp
 
 logger = get_logger(__name__)
+
 
 class RequestValidationMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp):
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         # We only want to validate our specific data generation endpoint
         if "/generate-mock-data" not in request.url.path:
             return await call_next(request)
@@ -34,7 +41,9 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             is_valid = await moderation_service.validate_input(body)
 
             if not is_valid:
-                logger.warning("Harmful content detected in request", path=request.url.path)
+                logger.warning(
+                    "Harmful content detected in request", path=request.url.path
+                )
                 return JSONResponse(
                     status_code=403,  # Forbidden
                     content={
@@ -47,4 +56,4 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
                 )
 
         response = await call_next(request)
-        return response 
+        return response
