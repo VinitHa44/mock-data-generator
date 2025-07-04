@@ -6,3 +6,4 @@ instruction_tuner.py
 .DS_Store
 node_modules
 .env
+model/phi35-finetuned-Q4_K_M.gguf

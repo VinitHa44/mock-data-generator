@@ -26,6 +26,7 @@ class GenerateMockDataUsecase:
         try:
             with open(path, 'w') as f:
                 json.dump(data, f, indent=2)
+            print(f"\033[96m🔍 INTERMEDIATE STEP SAVED: {path}\033[0m")
             logger.info("Saved intermediate step", path=path)
         except Exception as e:
             logger.error("Failed to save intermediate step", path=path, error=str(e))

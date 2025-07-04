@@ -42,7 +42,7 @@ class ImageEnrichmentService:
         if any(path.lower().endswith(ext) for ext in self.image_extensions):
             return True
 
-            return False
+        return False
 
     def _extract_keywords_from_url(self, url: str) -> str:
         """

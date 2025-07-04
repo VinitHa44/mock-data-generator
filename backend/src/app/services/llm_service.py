@@ -156,7 +156,18 @@ class LocalLLMService(LLMInterface):
         await self.initialize()
 
         prompt_content = create_finetuned_prompt_content(input_data, count)
-        messages = [{"role": "user", "content": prompt_content}]
+        
+        # This system prompt must match the one used during fine-tuning
+        # to properly activate the model's specialized knowledge.
+        system_prompt = (
+            "You are an expert assistant for generating synthetic data. "
+            "Analyze the user's request and generate a detailed, high-quality synthetic dataset entry."
+        )
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt_content}
+        ]
         
         grammar = None
         if input_data:

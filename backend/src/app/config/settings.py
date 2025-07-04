@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
     
     # LLM and Model Settings
-    GGUF_MODEL_PATH: str = "/Users/vishwasbheda/Developer/Personal Project/Mock_Data_Generation/MDG_4.0/MDG/model/ggml-model-Q4_0.gguf"
+    GGUF_MODEL_PATH: str = "model/phi35-finetuned-Q4_K_M.gguf"
     MODERATION_MODEL: str = "KoalaAI/Text-Moderation"
     PROMPT_INJECTION_MODEL: str = "protectai/deberta-v3-base-prompt-injection-v2"
     
