@@ -12,21 +12,36 @@ from app.middlewares.request_validation_middleware import (
     RequestValidationMiddleware,
 )
 from app.routers import generation_router
+from app.services.cache_service import cache_service
 from app.services.moderation_service import moderation_service
-from app.utils.logging_config import setup_logging
+from app.utils.logging_config import setup_logging, get_logger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Setup logging first
 setup_logging()
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # No startup logic needed
+    # Startup logic
+    try:
+        await cache_service.initialize()
+        logger.info("Application startup complete")
+    except Exception as e:
+        logger.error(f"Failed to initialize application: {e}")
+        raise
+    
     yield
+    
     # Shutdown logic
-    await moderation_service.close()
+    try:
+        await cache_service.shutdown()
+        await moderation_service.close()
+        logger.info("Application shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during application shutdown: {e}")
 
 
 app = FastAPI(

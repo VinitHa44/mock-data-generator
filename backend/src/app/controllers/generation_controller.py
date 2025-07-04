@@ -27,7 +27,7 @@ async def generate_mock_data(
     """
     logger.info("Received request for mock data generation", count=count)
 
-    result_data, from_cache = await generate_mock_data_usecase.execute(
+    result_data, from_cache, cache_info = await generate_mock_data_usecase.execute(
         input_examples=payload, count=count
     )
 
@@ -35,4 +35,5 @@ async def generate_mock_data(
         message="Response received successfully.",
         usedFromCache=from_cache,
         data=result_data,
+        cacheInfo=cache_info,
     )

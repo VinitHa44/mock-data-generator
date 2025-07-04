@@ -14,8 +14,8 @@ def create_finetuned_prompt_content(input_data: list[dict], count: int) -> str:
     Returns:
         A string containing the formatted prompt content.
     """
-    # Be very specific about image field format while keeping other fields normal
-    instruction = f"Generate {count} entries. IMPORTANT : For each and every image field, convert image URLs to 'img_keyword+keyword+keyword' format with plus signs. Do not enforce this format in any other fields."
+    # Be very specific about generating NEW data that's different from examples
+    instruction = f"Generate {count} NEW entries that follow the same structure as the examples but are completely different content. DO NOT copy or repeat any of the input examples. For image fields, use 'img_keyword+keyword+keyword' format with plus signs."
 
     # Convert the user's input data to a pretty JSON string
     input_text = json.dumps(input_data, indent=2)

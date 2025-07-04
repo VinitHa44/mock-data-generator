@@ -36,3 +36,4 @@ autoflake
 isort
 black
 vulture
+pybloom-live

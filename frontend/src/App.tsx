@@ -6,13 +6,13 @@ import GenerationControls from './components/GenerationControls';
 import ResultsDisplay from './components/ResultsDisplay';
 import { mockDataApi } from './services/api';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { APIResponse } from './types/api';
 
 function App() {
   const [exampleData, setExampleData] = useState<string>('');
   const [count, setCount] = useState<number>(10);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
-  const [results, setResults] = useState<Record<string, any>[] | null>(null);
-  const [isFromCache, setIsFromCache] = useState<boolean>(false);
+  const [response, setResponse] = useState<APIResponse | null>(null);
 
   // Check if we can generate (valid JSON with at least one example)
   const canGenerate = () => {
@@ -32,7 +32,7 @@ function App() {
     }
 
     setIsGenerating(true);
-    setResults(null);
+    setResponse(null);
     
     try {
       const examples = JSON.parse(exampleData);
@@ -40,17 +40,32 @@ function App() {
       
       toast.loading('Generating mock data...', { id: 'generation' });
       
-      const response = await mockDataApi.generateMockData(exampleArray, { count });
+      const apiResponse = await mockDataApi.generateMockData(exampleArray, { count });
       
-      setResults(response.data);
-      setIsFromCache(response.usedFromCache);
+      setResponse(apiResponse);
       
-      toast.success(
-        response.usedFromCache 
-          ? `Generated ${response.data.length} records from cache`
-          : `Generated ${response.data.length} records successfully`,
-        { id: 'generation' }
-      );
+      // Create appropriate toast message based on cache info
+      let toastMessage = `Generated ${apiResponse.data.length} records successfully`;
+      
+      if (apiResponse.cacheInfo) {
+        const { cachedCount, generatedCount, cacheHitType } = apiResponse.cacheInfo;
+        
+        switch (cacheHitType) {
+          case 'full':
+            toastMessage = `Retrieved ${cachedCount} records from cache`;
+            break;
+          case 'partial':
+            toastMessage = `Retrieved ${cachedCount} from cache + generated ${generatedCount} new records`;
+            break;
+          case 'none':
+            toastMessage = `Generated ${generatedCount} new records`;
+            break;
+        }
+      } else if (apiResponse.usedFromCache) {
+        toastMessage = `Retrieved ${apiResponse.data.length} records from cache`;
+      }
+      
+      toast.success(toastMessage, { id: 'generation' });
     } catch (error: any) {
       console.error('Generation error:', error);
       let errorMessage = 'Failed to generate mock data';
@@ -70,9 +85,9 @@ function App() {
   };
 
   const handleDownload = () => {
-    if (!results) return;
+    if (!response?.data) return;
     
-    const dataStr = JSON.stringify(results, null, 2);
+    const dataStr = JSON.stringify(response.data, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(dataBlob);
     
@@ -88,10 +103,10 @@ function App() {
   };
 
   const handleCopy = async () => {
-    if (!results) return;
+    if (!response?.data) return;
     
     try {
-      await navigator.clipboard.writeText(JSON.stringify(results, null, 2));
+      await navigator.clipboard.writeText(JSON.stringify(response.data, null, 2));
       toast.success('Copied to clipboard');
     } catch (error) {
       toast.error('Failed to copy to clipboard');
@@ -141,14 +156,12 @@ function App() {
                 />
               </div>
               
-              {results && (
-                <ResultsDisplay
-                  data={results}
-                  isFromCache={isFromCache}
-                  onDownload={handleDownload}
-                  onCopy={handleCopy}
-                />
-              )}
+              <ResultsDisplay
+                response={response}
+                isLoading={isGenerating}
+                onDownload={handleDownload}
+                onCopy={handleCopy}
+              />
             </div>
             
             {/* Controls Section */}

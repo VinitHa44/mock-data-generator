@@ -238,7 +238,7 @@ class LocalLLMService(LLMInterface):
                 self._llm.create_chat_completion,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=0.7,
+                temperature=0.9,  # Increased temperature for more creativity
                 top_p=0.95,
                 stop=["<|im_end|>"],
                 grammar=grammar,

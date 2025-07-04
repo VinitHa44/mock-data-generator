@@ -4,6 +4,12 @@ export interface APIResponse<T = any> {
   usedFromCache: boolean;
   data: T;
   error: string;
+  cacheInfo?: {
+    cachedCount: number;
+    generatedCount: number;
+    totalCount: number;
+    cacheHitType: 'full' | 'partial' | 'none';
+  };
 }
 
 export interface GenerateMockDataRequest {
