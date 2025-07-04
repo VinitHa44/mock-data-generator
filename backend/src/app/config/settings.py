@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     # Caching
     CACHE_GROUP_HASH_LIMIT: int = 50  # k-entry limit for hashes in a group
+    # CACHE_EXPIRATION_SECONDS: int = 7 * 24 * 60 * 60  # 1 week in seconds
+    CACHE_EXPIRATION_SECONDS: int = 2 * 60  # 2 min in seconds
 
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
@@ -93,7 +95,7 @@ class Settings(BaseSettings):
         (r"^([a-zA-Z_]+)_(\d+)$", "_"),
         (r"^([a-zA-Z_]+)\.(\d+)$", "."),
     ]
-    ID_KEY_PATTERNS: list = ["id", "_id"]  # Keys that should be treated as IDs
+    ID_KEY_PATTERNS: list = ["id", "_id", "Id", "ID"]  # Keys that should be treated as IDs
 
     # LLM System Prompt
     LLM_SYSTEM_PROMPT: str = (

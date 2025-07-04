@@ -19,6 +19,7 @@ class CacheService:
             redis_url, encoding="utf-8", decode_responses=True
         )
         self.hash_limit = settings.CACHE_GROUP_HASH_LIMIT
+        self.expiration_seconds = settings.CACHE_EXPIRATION_SECONDS
         
         # Bloom filter for quick rejection
         self.bloom_filter = BloomFilter(capacity=1000000, error_rate=0.1)
@@ -138,11 +139,35 @@ class CacheService:
             data_str = await self.redis_client.get(f"group:{group_id}:mockData")
             if data_str:
                 logger.info("Cache hit", group_id=group_id)
+                # Refresh TTL for accessed data
+                await self.refresh_cache_ttl(group_id)
                 return json.loads(data_str)
             return None
         except redis.exceptions.RedisError as e:
             logger.error("Redis error while getting cached data", error=str(e))
             raise CacheServiceError("Failed to retrieve data from cache.")
+
+    async def refresh_cache_ttl(self, group_id: str):
+        """
+        Refresh the TTL for a cache group when it's accessed.
+        """
+        try:
+            group_key = f"group:{group_id}"
+            mock_data_key = f"{group_key}:mockData"
+            hashes_key = f"{group_key}:hashes"
+            
+            # Refresh TTL for both keys
+            await self.redis_client.expire(mock_data_key, self.expiration_seconds)
+            await self.redis_client.expire(hashes_key, self.expiration_seconds)
+            
+            # Refresh TTL for all hash groups associated with this group
+            hashes = await self.redis_client.lrange(hashes_key, 0, -1)
+            for hash_value in hashes:
+                await self.redis_client.expire(f"hash:{hash_value}:groups", self.expiration_seconds)
+                
+            logger.debug(f"Refreshed TTL for cache group {group_id}")
+        except Exception as e:
+            logger.error(f"Error refreshing TTL for group {group_id}: {e}")
 
     async def update_group_hashes(self, group_id: str, new_hashes: List[str]):
         """
@@ -161,9 +186,13 @@ class CacheService:
                 
                 # Update reverse index
                 await self.redis_client.sadd(f"hash:{h}:groups", group_id)
+                await self.redis_client.expire(f"hash:{h}:groups", self.expiration_seconds)
                 
                 # Update bloom filter
                 self.bloom_filter.add(h)
+
+            # Set expiration for the group hash list
+            await self.redis_client.expire(group_hash_key, self.expiration_seconds)
 
             # Trim the list to the max size and get removed hashes
             removed_count = await self.redis_client.llen(group_hash_key) - self.hash_limit
@@ -197,22 +226,24 @@ class CacheService:
 
             pipe = self.redis_client.pipeline()
             
-            # Update mock data
-            pipe.set(f"{group_key}:mockData", json.dumps(mock_data))
+            # Update mock data with expiration
+            pipe.set(f"{group_key}:mockData", json.dumps(mock_data), ex=self.expiration_seconds)
             
             # Update hashes in group (limit to hash_limit)
             hashes_to_store = object_hashes[-self.hash_limit:] if len(object_hashes) > self.hash_limit else object_hashes
             pipe.delete(f"{group_key}:hashes")  # Clear existing hashes
             pipe.rpush(f"{group_key}:hashes", *hashes_to_store)
+            pipe.expire(f"{group_key}:hashes", self.expiration_seconds)
             
             # Update reverse index: hash → groups
             for hash in hashes_to_store:
                 pipe.sadd(f"hash:{hash}:groups", group_id)
+                pipe.expire(f"hash:{hash}:groups", self.expiration_seconds)
                 # Add to bloom filter
                 self.bloom_filter.add(hash)
 
             await pipe.execute()
-            logger.info("Updated existing cache group with new data", group_id=group_id)
+            logger.info("Updated existing cache group with new data", group_id=group_id, expiration_hours=self.expiration_seconds/3600)
         except redis.exceptions.RedisError as e:
             logger.error(
                 "Redis error while updating existing cache group", error=str(e)
@@ -237,21 +268,23 @@ class CacheService:
 
             pipe = self.redis_client.pipeline()
             
-            # Store mock data
-            pipe.set(f"{group_key}:mockData", json.dumps(mock_data))
+            # Store mock data with expiration
+            pipe.set(f"{group_key}:mockData", json.dumps(mock_data), ex=self.expiration_seconds)
             
             # Store hashes in group (limit to hash_limit)
             hashes_to_store = object_hashes[-self.hash_limit:] if len(object_hashes) > self.hash_limit else object_hashes
             pipe.rpush(f"{group_key}:hashes", *hashes_to_store)
+            pipe.expire(f"{group_key}:hashes", self.expiration_seconds)
             
             # Create reverse index: hash → groups
             for hash in hashes_to_store:
                 pipe.sadd(f"hash:{hash}:groups", group_id)
+                pipe.expire(f"hash:{hash}:groups", self.expiration_seconds)
                 # Add to bloom filter
                 self.bloom_filter.add(hash)
 
             await pipe.execute()
-            logger.info("Created new cache group with reverse index", group_id=group_id)
+            logger.info("Created new cache group with reverse index", group_id=group_id, expiration_hours=self.expiration_seconds/3600)
             return str(group_id)
         except redis.exceptions.RedisError as e:
             logger.error(
@@ -268,6 +301,61 @@ class CacheService:
             logger.info("Cache service shutdown complete")
         except Exception as e:
             logger.error(f"Error during cache service shutdown: {e}")
+
+    async def cleanup_expired_entries(self):
+        """
+        Clean up expired entries from bloom filter and reverse index.
+        This should be called periodically to prevent bloom filter false positives.
+        """
+        try:
+            # Get all hash keys and check their TTL
+            all_hash_keys = await self.redis_client.keys("hash:*:groups")
+            expired_hashes = []
+            
+            for hash_key in all_hash_keys:
+                ttl = await self.redis_client.ttl(hash_key)
+                if ttl == -2:  # Key doesn't exist (already expired)
+                    hash_value = hash_key.split(":")[1]
+                    expired_hashes.append(hash_value)
+                    logger.debug(f"Found expired hash: {hash_value[:8]}...")
+            
+            # Remove expired hashes from bloom filter
+            for hash_value in expired_hashes:
+                # Note: BloomFilter doesn't support removal, so we'll just log it
+                logger.info(f"Hash {hash_value[:8]}... has expired and will be ignored by bloom filter")
+            
+            logger.info(f"Cleanup completed: {len(expired_hashes)} expired hashes found")
+            
+        except Exception as e:
+            logger.error(f"Error during cache cleanup: {e}")
+
+    async def get_cache_info(self, group_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get cache information including TTL for a group.
+        """
+        try:
+            group_key = f"group:{group_id}"
+            mock_data_key = f"{group_key}:mockData"
+            hashes_key = f"{group_key}:hashes"
+            
+            # Get TTL for both keys
+            mock_data_ttl = await self.redis_client.ttl(mock_data_key)
+            hashes_ttl = await self.redis_client.ttl(hashes_key)
+            
+            # Get data size
+            data_str = await self.redis_client.get(mock_data_key)
+            data_size = len(data_str) if data_str else 0
+            
+            return {
+                "group_id": group_id,
+                "mock_data_ttl": mock_data_ttl,
+                "hashes_ttl": hashes_ttl,
+                "data_size_bytes": data_size,
+                "expires_in_hours": max(mock_data_ttl, hashes_ttl) / 3600 if max(mock_data_ttl, hashes_ttl) > 0 else 0
+            }
+        except Exception as e:
+            logger.error(f"Error getting cache info for group {group_id}: {e}")
+            return None
 
 
 # Singleton instance

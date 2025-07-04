@@ -8,3 +8,7 @@ node_modules
 .env
 model/phi35-finetuned-Q4_K_M.gguf
 __pycache__/
+test_concurrency_fixes.py
+test_id_generation.py
+test_json_parsing.py
+test_truncation_fix.py
