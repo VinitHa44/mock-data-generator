@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from typing import Any, Dict, List, Tuple
@@ -6,6 +7,7 @@ from app.config.settings import settings
 from app.repositories.log_repository import log_repository
 from app.services.cache_service import cache_service
 from app.services.id_generation_service import IdGenerationService
+from app.services.id_processing_service import id_processing_service
 from app.services.image_enrichment_service import image_enrichment_service
 from app.services.image_key_analyzer_service import image_key_analyzer_service
 from app.services.llm_service import llm_service
@@ -110,6 +112,17 @@ class GenerateMockDataUsecase:
         # Ensure we don't return more than requested
         return total_generated_data[:count]
 
+    async def _generate_ids_async(self, count: int, original_examples: List[Dict]) -> List[Dict]:
+        """Generate IDs asynchronously for the specified count."""
+        # Run ID generation in a thread pool since it's CPU-bound
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, 
+            id_processing_service.generate_ids_for_count, 
+            count, 
+            original_examples
+        )
+
     async def execute(
         self, input_examples: List[Dict], count: int
     ) -> Tuple[Dict, bool]:
@@ -138,16 +151,28 @@ class GenerateMockDataUsecase:
             request_id=request_id,
         )
 
-        raw_mock_data = await self._generate_and_validate_data(
-            input_examples, count, request_id
+        # 2a. Remove IDs from input examples before sending to LLM
+        cleaned_input_examples = id_processing_service.remove_ids_from_input(input_examples)
+        
+        # 2b. Generate IDs in parallel with LLM generation
+        logger.info(
+            "Starting parallel ID generation and LLM data generation.",
+            request_id=request_id,
+        )
+        
+        # Create tasks for parallel execution
+        llm_task = self._generate_and_validate_data(cleaned_input_examples, count, request_id)
+        id_task = asyncio.create_task(self._generate_ids_async(count, input_examples))
+        
+        # Wait for both tasks to complete
+        raw_mock_data, id_objects = await asyncio.gather(llm_task, id_task)
+        
+        # 2c. Combine LLM response with generated IDs
+        processed_data = id_processing_service.combine_llm_response_with_ids(
+            raw_mock_data, id_objects
         )
 
-        # 3. Post-process to ensure unique and pattern-preserved IDs
-        processed_data = self.id_generation_service.process_and_replace_ids(
-            raw_mock_data, input_examples
-        )
-
-        # 4. Analyze and identify image keys
+        # 3. Analyze and identify image keys
         if not processed_data:
             raise LLMGenerationError(
                 "Failed to generate any data from the LLM."
@@ -168,7 +193,7 @@ class GenerateMockDataUsecase:
             request_id=request_id,
         )
 
-        # 5. Enrich Data (Image URLs) - only for confirmed keys
+        # 4. Enrich Data (Image URLs) - only for confirmed keys
         logger.info(
             "Starting image URL enrichment post-processing.",
             request_id=request_id,
