@@ -7,3 +7,4 @@ instruction_tuner.py
 node_modules
 .env
 model/phi35-finetuned-Q4_K_M.gguf
+__pycache__/

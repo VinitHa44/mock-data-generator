@@ -7,6 +7,7 @@ from app.repositories.log_repository import log_repository
 from app.services.cache_service import cache_service
 from app.services.id_generation_service import IdGenerationService
 from app.services.image_enrichment_service import image_enrichment_service
+from app.services.image_key_analyzer_service import image_key_analyzer_service
 from app.services.llm_service import llm_service
 from app.usecases.generation_helpers import compute_hashes_for_payload
 from app.utils.app_exceptions import LLMGenerationError
@@ -146,18 +147,34 @@ class GenerateMockDataUsecase:
             raw_mock_data, input_examples
         )
 
-        # 4. Enrich Data (Image URLs)
+        # 4. Analyze and identify image keys
         if not processed_data:
             raise LLMGenerationError(
                 "Failed to generate any data from the LLM."
             )
 
         logger.info(
+            "Starting image key analysis.",
+            request_id=request_id,
+        )
+        
+        # Analyze input examples and processed data to identify which keys should be enriched
+        confirmed_image_keys = image_key_analyzer_service.identify_image_keys(
+            input_examples, processed_data
+        )
+        
+        logger.info(
+            f"Identified {len(confirmed_image_keys)} confirmed image keys for enrichment \n\n {confirmed_image_keys}.",
+            request_id=request_id,
+        )
+
+        # 5. Enrich Data (Image URLs) - only for confirmed keys
+        logger.info(
             "Starting image URL enrichment post-processing.",
             request_id=request_id,
         )
         final_mock_data = await image_enrichment_service.enrich_mock_data(
-            processed_data
+            processed_data, confirmed_keys=confirmed_image_keys
         )
 
         self._save_intermediate_step(
