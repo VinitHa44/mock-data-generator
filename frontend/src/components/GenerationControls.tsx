@@ -24,7 +24,7 @@ export const GenerationControls: React.FC<GenerationControlsProps> = ({
   isGenerating,
   progress
 }) => {
-  const [count, setCount] = useState(50);
+  const [count, setCount] = useState(10);
   const [enableModeration, setEnableModeration] = useState(true);
   const [temperature, setTemperature] = useState([0.7]);
   const [maxTokens, setMaxTokens] = useState([2048]);
@@ -55,37 +55,12 @@ export const GenerationControls: React.FC<GenerationControlsProps> = ({
   }, [count, enableModeration, temperature, maxTokens, topP, cacheExpiration, onGenerate]);
 
   const resetToDefaults = () => {
-    setCount(50);
+    setCount(10);
     setTemperature([0.7]);
     setMaxTokens([2048]);
     setTopP([0.9]);
     setEnableModeration(true);
     setCacheExpiration(false);
-  };
-
-  const presets = [
-    {
-      name: 'Conservative',
-      description: 'Safe, predictable results',
-      settings: { count: 25, temperature: 0.3, maxTokens: 1024, topP: 0.8 }
-    },
-    {
-      name: 'Balanced',
-      description: 'Good mix of creativity and consistency',
-      settings: { count: 50, temperature: 0.7, maxTokens: 2048, topP: 0.9 }
-    },
-    {
-      name: 'Creative',
-      description: 'More diverse and varied results',
-      settings: { count: 100, temperature: 1.0, maxTokens: 4096, topP: 0.95 }
-    }
-  ];
-
-  const applyPreset = (preset: typeof presets[0]) => {
-    setCount(preset.settings.count);
-    setTemperature([preset.settings.temperature]);
-    setMaxTokens([preset.settings.maxTokens]);
-    setTopP([preset.settings.topP]);
   };
 
   return (
@@ -103,29 +78,6 @@ export const GenerationControls: React.FC<GenerationControlsProps> = ({
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* Presets */}
-          <div>
-            <Label className="text-sm font-medium mb-3 block">Quick Presets</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {presets.map((preset) => (
-                <Button
-                  key={preset.name}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => applyPreset(preset)}
-                  disabled={isGenerating}
-                  className="h-auto p-3 flex flex-col items-start border-brand-primary/30 hover:bg-brand-primary/10"
-                >
-                  <span className="font-medium text-xs">{preset.name}</span>
-                  <span className="text-xs text-muted-foreground mt-1 leading-tight">
-                    {preset.description}
-                  </span>
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <Separator className="bg-brand-primary/20" />
 
           {/* Record Count */}
           <div>
@@ -309,38 +261,6 @@ export const GenerationControls: React.FC<GenerationControlsProps> = ({
           </Collapsible>
 
           <Separator className="bg-brand-primary/20" />
-
-          {/* Test Button */}
-          <Button
-            onClick={() => {
-              const testParams: Omit<GenerationRequest, 'input_data'> = {
-                count: 3,
-                enable_moderation: true,
-                temperature: 0.7,
-                max_tokens: 2048,
-                top_p: 0.9,
-                cache_expiration: false,
-                user_id: localStorage.getItem('mdg_user_id') || undefined,
-                session_id: localStorage.getItem('mdg_session_id') || undefined,
-              };
-              const sampleData = JSON.stringify([
-                {
-                  id: 1,
-                  name: "John Doe",
-                  email: "john@example.com",
-                  age: 30,
-                  profession: "Software Engineer"
-                }
-              ], null, 2);
-              onGenerate(testParams, sampleData);
-            }}
-            disabled={isGenerating}
-            variant="outline"
-            size="sm"
-            className="w-full border-brand-primary/30 hover:bg-brand-primary/10"
-          >
-            Test with Sample Data
-          </Button>
 
           {/* Generate Button */}
           <Button

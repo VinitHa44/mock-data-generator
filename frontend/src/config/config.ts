@@ -13,8 +13,8 @@ export const config = {
   ENABLE_DEBUG: import.meta.env.VITE_ENABLE_DEBUG === 'true',
   
   // API Timeouts
-  API_TIMEOUT: 30000, // 30 seconds
-  GENERATION_TIMEOUT: 300000, // 5 minutes for long generations
+  // API_TIMEOUT: 30000, // 30 seconds
+  // GENERATION_TIMEOUT: 300000, // 5 minutes for long generations
   
   // Feature Flags
   ENABLE_MODERATION: true,

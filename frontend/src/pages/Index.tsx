@@ -336,15 +336,6 @@ const Index = () => {
         </motion.div>
 
         <Tabs defaultValue="generator" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-1 bg-brand-glass/20 border border-brand-primary/20">
-            <TabsTrigger 
-              value="generator"
-              className="data-[state=active]:bg-brand-primary data-[state=active]:text-white"
-            >
-              <Database className="w-4 h-4 mr-2" />
-              Data Generator
-            </TabsTrigger>
-          </TabsList>
 
           <TabsContent value="generator" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

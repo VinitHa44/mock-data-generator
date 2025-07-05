@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     )
     
     # LLM Pool Configuration for Concurrent Processing
-    LLM_POOL_SIZE: int = 3  # Increased from 2 to 3 for better parallelism
+    LLM_POOL_SIZE: int = 2  # Increased from 2 to 3 for better parallelism
     LLM_BATCH_SIZE: int = 50  # Increased from 25 to 50 for 10 batches of 50 items
     LLM_BATCH_THRESHOLD: int = 15  # Use batch processing for counts > this value
     
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     CACHE_ENABLE_EXPIRATION: bool = False  # Enable/disable cache expiration
     # CACHE_EXPIRATION_SECONDS: int = 7 * 24 * 60 * 60  # 1 week in seconds
     # CACHE_EXPIRATION_SECONDS: int = 2 * 60  # 2 min in seconds
-    CACHE_EXPIRATION_SECONDS: int = 1 * 60  # Cache expiration time in seconds (only used if CACHE_ENABLE_EXPIRATION is True)
+    CACHE_EXPIRATION_SECONDS: int = 60  # Cache expiration time in seconds (only used if CACHE_ENABLE_EXPIRATION is True)
 
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100

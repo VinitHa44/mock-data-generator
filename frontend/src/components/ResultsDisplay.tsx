@@ -30,6 +30,12 @@ import {
   DropdownMenuTrigger 
 } from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import toast from 'react-hot-toast';
 import type { GenerateMockDataResponse } from '@/types/api';
 
@@ -46,6 +52,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'json'>('grid');
   const [copied, setCopied] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<number | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   const filteredData = useMemo(() => {
     if (!results?.data || !searchQuery) return results?.data || [];
@@ -261,16 +268,16 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
             <div className="flex items-center gap-2">
               <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'grid' | 'list' | 'json')}>
                 <TabsList className="bg-brand-glass/20 border border-brand-primary/20">
+                <TabsTrigger value="json" className="data-[state=active]:bg-brand-primary data-[state=active]:text-white">
+                    <Code className="w-4 h-4" />
+                  </TabsTrigger>
                   <TabsTrigger value="grid" className="data-[state=active]:bg-brand-primary data-[state=active]:text-white">
                     <Grid className="w-4 h-4" />
                   </TabsTrigger>
                   <TabsTrigger value="list" className="data-[state=active]:bg-brand-primary data-[state=active]:text-white">
                     <List className="w-4 h-4" />
                   </TabsTrigger>
-                  <TabsTrigger value="json" className="data-[state=active]:bg-brand-primary data-[state=active]:text-white">
-                    <Code className="w-4 h-4" />
-                  </TabsTrigger>
-                </TabsList>
+=                </TabsList>
               </Tabs>
               
               <Button
@@ -337,8 +344,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => {
                             setSelectedRecord(index);
-                            // Show record details in a modal or expand the record
-                            console.log('Viewing record:', record);
+                            setIsDetailModalOpen(true);
                           }}>
                             <Eye className="w-4 h-4 mr-2" />
                             View Details
@@ -414,13 +420,20 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                 className="space-y-4"
               >
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-muted-foreground">Generated JSON Data</h4>
+                  <h4 className="text-sm font-medium text-muted-foreground">
+                    Generated JSON Data
+                    {searchQuery && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        (Filtered: {filteredData.length} of {results.data.length})
+                      </span>
+                    )}
+                  </h4>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      navigator.clipboard.writeText(JSON.stringify(results.data, null, 2));
-                      toast.success('JSON copied to clipboard');
+                      navigator.clipboard.writeText(JSON.stringify(filteredData, null, 2));
+                      toast.success('Filtered JSON copied to clipboard');
                     }}
                     className="border-brand-primary/30 hover:bg-brand-primary/10"
                   >
@@ -432,7 +445,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                   <Editor
                     height="400px"
                     defaultLanguage="json"
-                    value={JSON.stringify(results.data, null, 2)}
+                    value={JSON.stringify(filteredData, null, 2)}
                     options={{
                       readOnly: true,
                       wordWrap: 'on',
@@ -464,6 +477,49 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
           )}
         </CardContent>
       </Card>
+
+      {/* Record Details Modal */}
+      <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="w-5 h-5 text-brand-primary" />
+              Record Details
+              {selectedRecord !== null && (
+                <Badge variant="secondary" className="bg-brand-primary/20 text-brand-primary">
+                  Record {selectedRecord + 1}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {selectedRecord !== null && results?.data[selectedRecord] && (
+              <div className="border border-brand-primary/20 rounded-lg overflow-hidden bg-brand-surface/5">
+                <Editor
+                  height="400px"
+                  defaultLanguage="json"
+                  value={JSON.stringify(results.data[selectedRecord], null, 2)}
+                  options={{
+                    readOnly: true,
+                    wordWrap: 'on',
+                    lineNumbers: 'on',
+                    folding: true,
+                    bracketPairColorization: { enabled: true },
+                    autoIndent: 'advanced',
+                    tabSize: 2,
+                    insertSpaces: true,
+                    fontSize: 14,
+                    fontFamily: 'JetBrains Mono, Consolas, monospace',
+                    theme: 'vs-dark',
+                  }}
+                  theme="vs-dark"
+                />
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 };

@@ -19,7 +19,7 @@ const MODEL_SERVER_URL = config.MODEL_SERVER_URL;
 // Create axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: config.API_TIMEOUT,
+  // timeout: config.API_TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
   },

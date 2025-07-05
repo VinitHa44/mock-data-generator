@@ -265,8 +265,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                 smoothScrolling: true,
                 cursorBlinking: 'smooth',
                 renderLineHighlight: 'all',
-                selectionHighlight: false,
-                occurrencesHighlight: false,
+                hideCursorInOverviewRuler: true,
+                overviewRulerBorder: false,
               }}
               theme="vs-dark"
               loading={
