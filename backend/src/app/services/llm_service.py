@@ -20,7 +20,13 @@ logger = get_logger(__name__)
 class LLMInterface(ABC):
     @abstractmethod
     async def generate_mock_data(
-        self, input_data: List[Dict], count: int
+        self, 
+        input_data: List[Dict], 
+        count: int,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> List[Dict]:
         pass
 
@@ -164,12 +170,12 @@ class LocalLLMService(LLMInterface):
 
         return Llama(
             model_path=model_path,
-            n_ctx=4096,  # Reduced context for better memory efficiency
+            n_ctx=8192,  # Increased context for larger batches (50 items)
             n_gpu_layers=-1,
-            n_batch=256,  # Reduced batch size for better concurrency
+            n_batch=512,  # Increased batch size for better throughput with 50 items
             verbose=False,  # Disable verbose for production
             chat_format="chatml",
-            n_threads=2,  # Limit threads per instance
+            n_threads=4,  # Increased threads per instance for better performance
         )
 
     async def initialize(self):
@@ -199,7 +205,7 @@ class LocalLLMService(LLMInterface):
         return model
 
     async def _run_generation_with_model(
-        self, llm_instance: Llama, input_data: List[Dict], count: int
+        self, llm_instance: Llama, input_data: List[Dict], count: int, enable_moderation: bool, temperature: float, max_tokens: int, top_p: float
     ) -> List[Dict]:
         """Run generation with a specific model instance."""
         prompt_content = create_finetuned_prompt_content(input_data, count)
@@ -226,8 +232,8 @@ class LocalLLMService(LLMInterface):
                 logger.warning(f"Could not create GBNF grammar: {e}")
 
         # Set a reasonable max_tokens to prevent extremely large responses
-        max_tokens = min(settings.MAX_TOTAL_TOKENS, count * settings.MAX_TOKENS_PER_ITEM)  # Limit tokens based on count
-        logger.debug(f"Invoking GGUF model with GBNF grammar. Generating {count} items with max_tokens={max_tokens}.")
+        max_tokens = min(max_tokens, count * settings.MAX_TOKENS_PER_ITEM)  # Limit tokens based on count
+        logger.debug(f"Invoking GGUF model with GBNF grammar. Generating {count} items with max_tokens={max_tokens}, temperature={temperature}, top_p={top_p}.")
 
         try:
             loop = asyncio.get_running_loop()
@@ -236,8 +242,8 @@ class LocalLLMService(LLMInterface):
                 llm_instance.create_chat_completion,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=settings.LLM_TEMPERATURE,
-                top_p=settings.LLM_TOP_P,
+                temperature=temperature,
+                top_p=top_p,
                 stop=["<|im_end|>"],
                 grammar=grammar,
             )
@@ -591,15 +597,36 @@ class LocalLLMService(LLMInterface):
         return text
 
     async def _run_generation(
-        self, input_data: List[Dict], count: int
+        self, 
+        input_data: List[Dict], 
+        count: int,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> List[Dict]:
         async with PerformanceTracker("generation", count=count, method="single"):
             await self.initialize()
             llm_instance = self._get_available_model()
-            return await self._run_generation_with_model(llm_instance, input_data, count)
+            return await self._run_generation_with_model(
+                llm_instance, 
+                input_data, 
+                count,
+                enable_moderation,
+                temperature,
+                max_tokens,
+                top_p
+            )
 
     async def generate_mock_data_batch(
-        self, input_data: List[Dict], total_count: int, batch_size: int = None
+        self, 
+        input_data: List[Dict], 
+        total_count: int, 
+        batch_size: int = None,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> List[Dict]:
         """
         Generate data in parallel batches for better performance.
@@ -613,22 +640,22 @@ class LocalLLMService(LLMInterface):
             
             if total_count <= batch_size:
                 # For small counts, use single generation
-                return await self._run_generation(input_data, total_count)
+                return await self._run_generation(input_data, total_count, enable_moderation, temperature, max_tokens, top_p)
             
             # Try with the specified batch size first
-            result = await self._try_batch_generation(input_data, total_count, batch_size)
+            result = await self._try_batch_generation(input_data, total_count, batch_size, enable_moderation, temperature, max_tokens, top_p)
             
             # If that fails, try with smaller batch sizes
             if not result or len(result) < total_count * 0.8:  # Less than 80% success
                 logger.warning(f"Batch generation with size {batch_size} failed, trying smaller batches")
                 
-                smaller_batch_sizes = [15, 10, 5]
+                smaller_batch_sizes = [25, 15, 10]  # Updated fallback sizes
                 for smaller_batch in smaller_batch_sizes:
                     if smaller_batch >= batch_size:
                         continue
                     
                     logger.info(f"Retrying with batch size {smaller_batch}")
-                    fallback_result = await self._try_batch_generation(input_data, total_count, smaller_batch)
+                    fallback_result = await self._try_batch_generation(input_data, total_count, smaller_batch, enable_moderation, temperature, max_tokens, top_p)
                     
                     if fallback_result and len(fallback_result) >= total_count * 0.8:
                         logger.info(f"Successfully generated {len(fallback_result)} items with batch size {smaller_batch}")
@@ -637,7 +664,7 @@ class LocalLLMService(LLMInterface):
             return result[:total_count] if result else []
 
     async def _try_batch_generation(
-        self, input_data: List[Dict], total_count: int, batch_size: int
+        self, input_data: List[Dict], total_count: int, batch_size: int, enable_moderation: bool, temperature: float, max_tokens: int, top_p: float
     ) -> List[Dict]:
         """Try batch generation with a specific batch size."""
         # Calculate number of batches needed
@@ -656,7 +683,7 @@ class LocalLLMService(LLMInterface):
             llm_instance = self._get_available_model()
             
             # Create task for this batch
-            task = self._run_generation_with_model(llm_instance, input_data, current_batch_size)
+            task = self._run_generation_with_model(llm_instance, input_data, current_batch_size, enable_moderation, temperature, max_tokens, top_p)
             tasks.append(task)
         
         # Execute all batches in parallel with error handling
@@ -678,7 +705,7 @@ class LocalLLMService(LLMInterface):
             logger.warning(f"Retrying {len(failed_batches)} failed batches")
             for batch_idx in failed_batches:
                 retry_success = await self._retry_failed_batch(
-                    input_data, batch_size, all_data, batch_idx
+                    input_data, batch_size, all_data, batch_idx, enable_moderation, temperature, max_tokens, top_p
                 )
                 if not retry_success:
                     logger.error(f"Batch {batch_idx + 1} failed after retry")
@@ -686,7 +713,15 @@ class LocalLLMService(LLMInterface):
         return all_data
 
     async def _retry_failed_batch(
-        self, input_data: List[Dict], batch_size: int, all_data: List[Dict], batch_idx: int
+        self, 
+        input_data: List[Dict], 
+        batch_size: int, 
+        all_data: List[Dict], 
+        batch_idx: int,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> bool:
         """Retry a failed batch with exponential backoff."""
         max_retries = settings.LLM_RETRY_ATTEMPTS
@@ -700,7 +735,7 @@ class LocalLLMService(LLMInterface):
                 await asyncio.sleep(delay)
                 
                 llm_instance = self._get_available_model()
-                result = await self._run_generation_with_model(llm_instance, input_data, batch_size)
+                result = await self._run_generation_with_model(llm_instance, input_data, batch_size, enable_moderation, temperature, max_tokens, top_p)
                 
                 if result:
                     all_data.extend(result)
@@ -713,7 +748,13 @@ class LocalLLMService(LLMInterface):
         return False
 
     async def generate_mock_data(
-        self, input_data: List[Dict], count: int
+        self, 
+        input_data: List[Dict], 
+        count: int,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> List[Dict]:
         """
         Main entry point for data generation.
@@ -721,19 +762,27 @@ class LocalLLMService(LLMInterface):
         """
         # Use batch generation for counts > threshold for better performance
         if count > settings.LLM_BATCH_THRESHOLD:
-            return await self._adaptive_batch_generation(input_data, count)
+            return await self._adaptive_batch_generation(input_data, count, enable_moderation, temperature, max_tokens, top_p)
         else:
             return await self._run_generation(input_data, count)
 
-    async def _adaptive_batch_generation(self, input_data: List[Dict], total_count: int) -> List[Dict]:
+    async def _adaptive_batch_generation(
+        self, 
+        input_data: List[Dict], 
+        total_count: int,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
+    ) -> List[Dict]:
         """Adaptive batch generation that adjusts batch size based on success rate."""
-        batch_sizes = [settings.LLM_BATCH_SIZE, 15, 10, 5]
+        batch_sizes = [settings.LLM_BATCH_SIZE, 25, 15, 10]  # Updated fallback sizes
         
         for batch_size in batch_sizes:
             logger.info(f"Trying batch generation with size {batch_size}")
             
             try:
-                result = await self.generate_mock_data_batch(input_data, total_count, batch_size)
+                result = await self.generate_mock_data_batch(input_data, total_count, batch_size, enable_moderation, temperature, max_tokens, top_p)
                 
                 # Check if we got a reasonable number of items
                 success_rate = len(result) / total_count if total_count > 0 else 0
@@ -751,16 +800,16 @@ class LocalLLMService(LLMInterface):
         # If all batch sizes fail, try single generation for smaller counts
         logger.warning("All batch sizes failed, trying single generation")
         if total_count <= 10:
-            return await self._run_generation(input_data, total_count)
+            return await self._run_generation(input_data, total_count, enable_moderation, temperature, max_tokens, top_p)
         else:
             # Try generating in smaller chunks
             chunks = []
             remaining = total_count
             
             while remaining > 0:
-                chunk_size = min(5, remaining)
+                chunk_size = min(10, remaining)  # Increased from 5 to 10 for better efficiency
                 try:
-                    chunk = await self._run_generation(input_data, chunk_size)
+                    chunk = await self._run_generation(input_data, chunk_size, enable_moderation, temperature, max_tokens, top_p)
                     chunks.extend(chunk)
                     remaining -= len(chunk)
                 except Exception as e:

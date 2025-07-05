@@ -202,27 +202,27 @@ class ImageEnrichmentService:
             logger.warning(f"URL validation failed for {url}: {str(e)}")
             return False
 
-    async def _validate_urls_concurrently(self, urls: List[str]) -> List[Tuple[str, bool]]:
-        """
-        Validates multiple URLs concurrently and returns list of (url, is_valid) tuples.
-        """
-        async def validate_single_url(url: str) -> Tuple[str, bool]:
-            is_valid = await self._validate_image_url(url)
-            return (url, is_valid)
+    # async def _validate_urls_concurrently(self, urls: List[str]) -> List[Tuple[str, bool]]:
+    #     """
+    #     Validates multiple URLs concurrently and returns list of (url, is_valid) tuples.
+    #     """
+    #     async def validate_single_url(url: str) -> Tuple[str, bool]:
+    #         is_valid = await self._validate_image_url(url)
+    #         return (url, is_valid)
 
-        # Create tasks for concurrent validation
-        tasks = [validate_single_url(url) for url in urls]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    #     # Create tasks for concurrent validation
+    #     tasks = [validate_single_url(url) for url in urls]
+    #     results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Handle any exceptions and return valid results
-        valid_results = []
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning(f"URL validation task failed: {result}")
-            else:
-                valid_results.append(result)
+    #     # Handle any exceptions and return valid results
+    #     valid_results = []
+    #     for result in results:
+    #         if isinstance(result, Exception):
+    #             logger.warning(f"URL validation task failed: {result}")
+    #         else:
+    #             valid_results.append(result)
         
-        return valid_results
+    #     return valid_results
 
     async def _fetch_image_url_from_openverse(self, keywords: str) -> Optional[str]:
         """Fetch a random image URL from Openverse for the given keywords."""

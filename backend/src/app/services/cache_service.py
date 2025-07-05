@@ -20,6 +20,7 @@ class CacheService:
         )
         self.hash_limit = settings.CACHE_GROUP_HASH_LIMIT
         self.expiration_seconds = settings.CACHE_EXPIRATION_SECONDS
+        self.enable_expiration = settings.CACHE_ENABLE_EXPIRATION
         
         # Bloom filter for quick rejection
         self.bloom_filter = BloomFilter(capacity=1000000, error_rate=0.1)
@@ -27,6 +28,12 @@ class CacheService:
         # Initialize bloom filter synchronously during startup
         # Note: This should be called after the instance is created
         self._initialized = False
+        
+        # Log cache configuration
+        if self.enable_expiration:
+            logger.info(f"Cache expiration enabled: {self.expiration_seconds} seconds")
+        else:
+            logger.info("Cache expiration disabled - cached data will persist indefinitely")
 
     async def initialize(self):
         """Initialize the cache service - must be called after creation"""
@@ -150,7 +157,12 @@ class CacheService:
     async def refresh_cache_ttl(self, group_id: str):
         """
         Refresh the TTL for a cache group when it's accessed.
+        Only applies expiration if CACHE_ENABLE_EXPIRATION is True.
         """
+        if not self.enable_expiration:
+            logger.debug(f"Cache expiration disabled - skipping TTL refresh for group {group_id}")
+            return
+            
         try:
             group_key = f"group:{group_id}"
             mock_data_key = f"{group_key}:mockData"
@@ -186,13 +198,15 @@ class CacheService:
                 
                 # Update reverse index
                 await self.redis_client.sadd(f"hash:{h}:groups", group_id)
-                await self.redis_client.expire(f"hash:{h}:groups", self.expiration_seconds)
+                if self.enable_expiration:
+                    await self.redis_client.expire(f"hash:{h}:groups", self.expiration_seconds)
                 
                 # Update bloom filter
                 self.bloom_filter.add(h)
 
             # Set expiration for the group hash list
-            await self.redis_client.expire(group_hash_key, self.expiration_seconds)
+            if self.enable_expiration:
+                await self.redis_client.expire(group_hash_key, self.expiration_seconds)
 
             # Trim the list to the max size and get removed hashes
             removed_count = await self.redis_client.llen(group_hash_key) - self.hash_limit
@@ -212,7 +226,11 @@ class CacheService:
             # This is a non-critical error, so we just log it.
 
     async def update_existing_group_cache(
-        self, group_id: str, object_hashes: List[str], mock_data: List[Dict[str, Any]]
+        self, 
+        group_id: str, 
+        object_hashes: List[str], 
+        mock_data: List[Dict[str, Any]],
+        cache_expiration: bool = None
     ) -> None:
         """
         Update an existing cache group with new data.
@@ -221,29 +239,40 @@ class CacheService:
         if not self._initialized:
             await self.initialize()
             
+        # Use the passed parameter if provided, otherwise use the global setting
+        use_expiration = cache_expiration if cache_expiration is not None else self.enable_expiration
+            
         try:
             group_key = f"group:{group_id}"
 
             pipe = self.redis_client.pipeline()
             
             # Update mock data with expiration
-            pipe.set(f"{group_key}:mockData", json.dumps(mock_data), ex=self.expiration_seconds)
+            if use_expiration:
+                pipe.set(f"{group_key}:mockData", json.dumps(mock_data), ex=self.expiration_seconds)
+            else:
+                pipe.set(f"{group_key}:mockData", json.dumps(mock_data))
             
             # Update hashes in group (limit to hash_limit)
             hashes_to_store = object_hashes[-self.hash_limit:] if len(object_hashes) > self.hash_limit else object_hashes
             pipe.delete(f"{group_key}:hashes")  # Clear existing hashes
             pipe.rpush(f"{group_key}:hashes", *hashes_to_store)
-            pipe.expire(f"{group_key}:hashes", self.expiration_seconds)
+            if use_expiration:
+                pipe.expire(f"{group_key}:hashes", self.expiration_seconds)
             
             # Update reverse index: hash → groups
             for hash in hashes_to_store:
                 pipe.sadd(f"hash:{hash}:groups", group_id)
-                pipe.expire(f"hash:{hash}:groups", self.expiration_seconds)
+                if use_expiration:
+                    pipe.expire(f"hash:{hash}:groups", self.expiration_seconds)
                 # Add to bloom filter
                 self.bloom_filter.add(hash)
 
             await pipe.execute()
-            logger.info("Updated existing cache group with new data", group_id=group_id, expiration_hours=self.expiration_seconds/3600)
+            if use_expiration:
+                logger.info("Updated existing cache group with new data", group_id=group_id, expiration_seconds=self.expiration_seconds)
+            else:
+                logger.info("Updated existing cache group with new data (no expiration)", group_id=group_id)
         except redis.exceptions.RedisError as e:
             logger.error(
                 "Redis error while updating existing cache group", error=str(e)
@@ -253,7 +282,10 @@ class CacheService:
             )
 
     async def create_new_group_cache(
-        self, object_hashes: List[str], mock_data: List[Dict[str, Any]]
+        self, 
+        object_hashes: List[str], 
+        mock_data: List[Dict[str, Any]],
+        cache_expiration: bool = None
     ) -> str:
         """
         Create a new cache group with its hashes and mock data.
@@ -262,6 +294,9 @@ class CacheService:
         if not self._initialized:
             await self.initialize()
             
+        # Use the passed parameter if provided, otherwise use the global setting
+        use_expiration = cache_expiration if cache_expiration is not None else self.enable_expiration
+            
         try:
             group_id = await self.redis_client.incr("next_group_id")
             group_key = f"group:{group_id}"
@@ -269,22 +304,30 @@ class CacheService:
             pipe = self.redis_client.pipeline()
             
             # Store mock data with expiration
-            pipe.set(f"{group_key}:mockData", json.dumps(mock_data), ex=self.expiration_seconds)
+            if use_expiration:
+                pipe.set(f"{group_key}:mockData", json.dumps(mock_data), ex=self.expiration_seconds)
+            else:
+                pipe.set(f"{group_key}:mockData", json.dumps(mock_data))
             
             # Store hashes in group (limit to hash_limit)
             hashes_to_store = object_hashes[-self.hash_limit:] if len(object_hashes) > self.hash_limit else object_hashes
             pipe.rpush(f"{group_key}:hashes", *hashes_to_store)
-            pipe.expire(f"{group_key}:hashes", self.expiration_seconds)
+            if use_expiration:
+                pipe.expire(f"{group_key}:hashes", self.expiration_seconds)
             
             # Create reverse index: hash → groups
             for hash in hashes_to_store:
                 pipe.sadd(f"hash:{hash}:groups", group_id)
-                pipe.expire(f"hash:{hash}:groups", self.expiration_seconds)
+                if use_expiration:
+                    pipe.expire(f"hash:{hash}:groups", self.expiration_seconds)
                 # Add to bloom filter
                 self.bloom_filter.add(hash)
 
             await pipe.execute()
-            logger.info("Created new cache group with reverse index", group_id=group_id, expiration_hours=self.expiration_seconds/3600)
+            if use_expiration:
+                logger.info("Created new cache group with reverse index", group_id=group_id, expiration_seconds=self.expiration_seconds)
+            else:
+                logger.info("Created new cache group with reverse index (no expiration)", group_id=group_id)
             return str(group_id)
         except redis.exceptions.RedisError as e:
             logger.error(

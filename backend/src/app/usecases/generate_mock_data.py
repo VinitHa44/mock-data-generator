@@ -97,7 +97,14 @@ class GenerateMockDataUsecase:
         return False
 
     async def _generate_and_validate_data(
-        self, input_examples: List[Dict], count: int, request_id: str
+        self, 
+        input_examples: List[Dict], 
+        count: int, 
+        request_id: str,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> List[Dict]:
         """
         Generates data and ensures the count is correct, using an intelligent retry loop
@@ -118,7 +125,12 @@ class GenerateMockDataUsecase:
 
             # Use batch generation for better performance with large counts
             generated_data = await llm_service.generate_mock_data(
-                input_examples, remaining_count
+                input_examples, 
+                remaining_count,
+                enable_moderation,
+                temperature,
+                max_tokens,
+                top_p
             )
             self._save_intermediate_step(
                 generated_data, f"llm_response_attempt_{attempts+1}", request_id
@@ -177,7 +189,14 @@ class GenerateMockDataUsecase:
         )
 
     async def execute(
-        self, input_examples: List[Dict], count: int
+        self, 
+        input_examples: List[Dict], 
+        count: int,
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9,
+        cache_expiration: bool = False
     ) -> Tuple[Dict, bool, dict]:
         request_id = str(uuid.uuid4())
         logger.info(
@@ -214,7 +233,7 @@ class GenerateMockDataUsecase:
             
             # Generate only the remaining count needed
             additional_data = await self._generate_remaining_data(
-                input_examples, remaining_count, request_id, cached_data
+                input_examples, remaining_count, request_id, cached_data, enable_moderation, temperature, max_tokens, top_p
             )
             
             # Combine cached and new data
@@ -223,12 +242,12 @@ class GenerateMockDataUsecase:
             # Update the existing cache group with the new combined data
             if group_id:
                 await cache_service.update_existing_group_cache(
-                    group_id, object_hashes, final_mock_data
+                    group_id, object_hashes, final_mock_data, cache_expiration
                 )
             else:
                 # Fallback: create new group if no group_id was returned
                 await cache_service.create_new_group_cache(
-                    object_hashes, final_mock_data
+                    object_hashes, final_mock_data, cache_expiration
                 )
             
             # Log token usage for the additional generation only
@@ -262,7 +281,7 @@ class GenerateMockDataUsecase:
         )
         
         # Create tasks for parallel execution
-        llm_task = self._generate_and_validate_data(cleaned_input_examples, count, request_id)
+        llm_task = self._generate_and_validate_data(cleaned_input_examples, count, request_id, enable_moderation, temperature, max_tokens, top_p)
         id_task = asyncio.create_task(self._generate_ids_async(count, input_examples))
         
         # Wait for both tasks to complete
@@ -309,7 +328,7 @@ class GenerateMockDataUsecase:
 
         # 5. Cache the new data
         await cache_service.create_new_group_cache(
-            object_hashes, final_mock_data
+            object_hashes, final_mock_data, cache_expiration
         )
 
         # 6. Log token usage (simplified)
@@ -328,7 +347,15 @@ class GenerateMockDataUsecase:
         return (final_mock_data, False, cache_info)
 
     async def _generate_remaining_data(
-        self, input_examples: List[Dict], remaining_count: int, request_id: str, existing_data: List[Dict]
+        self, 
+        input_examples: List[Dict], 
+        remaining_count: int, 
+        request_id: str, 
+        existing_data: List[Dict],
+        enable_moderation: bool = True,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        top_p: float = 0.9
     ) -> List[Dict]:
         """
         Generate only the remaining count of data items needed.
@@ -343,7 +370,7 @@ class GenerateMockDataUsecase:
         cleaned_input_examples = id_processing_service.remove_ids_from_input(input_examples)
         
         # Generate IDs in parallel with LLM generation
-        llm_task = self._generate_and_validate_data(cleaned_input_examples, remaining_count, request_id)
+        llm_task = self._generate_and_validate_data(cleaned_input_examples, remaining_count, request_id, enable_moderation, temperature, max_tokens, top_p)
         id_task = asyncio.create_task(self._generate_ids_async(remaining_count, input_examples))
         
         # Wait for both tasks to complete

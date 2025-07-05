@@ -15,15 +15,15 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
 
     # LLM and Model Settings
-    GGUF_MODEL_PATH: str = "model/phi35-finetuned-Q4_K_M.gguf"
+    GGUF_MODEL_PATH: str = "../model/phi35-finetuned-Q4_K_M(1).gguf"
     MODERATION_MODEL: str = "KoalaAI/Text-Moderation"
     PROMPT_INJECTION_MODEL: str = (
         "protectai/deberta-v3-base-prompt-injection-v2"
     )
     
     # LLM Pool Configuration for Concurrent Processing
-    LLM_POOL_SIZE: int = 2  # Reduced from 3 for better stability
-    LLM_BATCH_SIZE: int = 25  # Reduced from 50 for better reliability
+    LLM_POOL_SIZE: int = 3  # Increased from 2 to 3 for better parallelism
+    LLM_BATCH_SIZE: int = 50  # Increased from 25 to 50 for 10 batches of 50 items
     LLM_BATCH_THRESHOLD: int = 15  # Use batch processing for counts > this value
     
     # LLM Generation Parameters for Stability
@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     
     # Performance Tuning (adjust based on your hardware)
     # For 500 samples per user:
-    # - LLM_POOL_SIZE=2: Allows 2 concurrent generations (more stable)
-    # - LLM_BATCH_SIZE=25: Processes 500 samples in 20 parallel batches
-    # - Expected performance: ~15-20 seconds for 500 samples vs 60+ seconds sequentially
+    # - LLM_POOL_SIZE=3: Allows 3 concurrent generations (better parallelism)
+    # - LLM_BATCH_SIZE=50: Processes 500 samples in 10 parallel batches
+    # - Expected performance: ~10-15 seconds for 500 samples vs 60+ seconds sequentially
 
     # Services
     REDIS_URL: str = "redis://localhost:6379"
@@ -47,8 +47,10 @@ class Settings(BaseSettings):
 
     # Caching
     CACHE_GROUP_HASH_LIMIT: int = 50  # k-entry limit for hashes in a group
+    CACHE_ENABLE_EXPIRATION: bool = False  # Enable/disable cache expiration
     # CACHE_EXPIRATION_SECONDS: int = 7 * 24 * 60 * 60  # 1 week in seconds
-    CACHE_EXPIRATION_SECONDS: int = 2 * 60  # 2 min in seconds
+    # CACHE_EXPIRATION_SECONDS: int = 2 * 60  # 2 min in seconds
+    CACHE_EXPIRATION_SECONDS: int = 1 * 60  # Cache expiration time in seconds (only used if CACHE_ENABLE_EXPIRATION is True)
 
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
@@ -56,7 +58,7 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
-    INTERMEDIATE_SAVE_PATH: str = "intermediate_steps"
+    INTERMEDIATE_SAVE_PATH: str = "../intermediate_steps"
 
     # CORS Settings
     CORS_ALLOW_ORIGINS: list = ["http://localhost:3000", "http://127.0.0.1:3000"]

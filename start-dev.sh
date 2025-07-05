@@ -45,20 +45,20 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)/backend/src:$(pwd)/model_server/src
 
 # --- Step 2: Start Model Server ---
 echo "🧠 Starting Model Server on port 8001..."
-python -m uvicorn model_server.src.main:app --host 0.0.0.0 --port 8001 &
+python3 -m uvicorn model_server.src.main:app --host 0.0.0.0 --port 8001 &
 MODEL_SERVER_PID=$!
 sleep 5 # Give it a moment to load models
 
 # --- Step 3: Start Backend ---
 echo "⚙️ Starting Backend Server on port 8000..."
-python -m uvicorn backend.src.main:app --host 0.0.0.0 --port 8000 --reload &
+python3 -m uvicorn backend.src.main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 sleep 3
 
 # --- Step 4: Start Frontend ---
 echo "🎨 Starting Frontend (React) on port 3000..."
 cd frontend
-npm start &
+npm run dev &
 FRONTEND_PID=$!
 cd ..
 
