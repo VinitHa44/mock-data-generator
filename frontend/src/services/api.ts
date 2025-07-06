@@ -1,6 +1,7 @@
-import axios, { AxiosResponse } from 'axios';
+import axios, { AxiosResponse, AxiosError } from 'axios';
 import toast from 'react-hot-toast';
 import { config, API_ENDPOINTS } from '@/config/config';
+import { getErrorMessage } from '@/lib/utils';
 import type {
   GenerationRequest,
   GenerateMockDataResponse,
@@ -45,25 +46,31 @@ apiClient.interceptors.request.use(
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  (error: AxiosError<unknown>) => {
+    const responseData = error.response?.data as { message?: string; code?: string; details?: unknown } | undefined;
     const apiError: ApiError = {
-      message: error.response?.data?.message || error.message || 'An unexpected error occurred',
-      code: error.response?.data?.code || error.code || 'UNKNOWN_ERROR',
-      details: error.response?.data?.details,
+      message: responseData?.message || error.message || 'An unexpected error occurred',
+      code: responseData?.code || error.code || 'UNKNOWN_ERROR',
+      details: responseData?.details,
       timestamp: new Date().toISOString(),
     };
 
-    // Show user-friendly error messages
+    // Enhanced error handling with specific network error detection
     if (error.response?.status === 429) {
       toast.error('Rate limit exceeded. Please wait a moment before trying again.');
-    } else if (error.response?.status >= 500) {
-      toast.error('Server error. Our team has been notified.');
     } else if (error.response?.status === 400) {
       toast.error(apiError.message);
+    } else if (error.response?.status === 404) {
+      toast.error('Service endpoint not found. Please check if the backend is running.');
+    } else if (error.response?.status === 403) {
+      toast.error('Access denied. Please check your permissions.');
+    } else if (error.response?.status === 401) {
+      toast.error('Authentication required. Please log in again.');
     } else if (!navigator.onLine) {
-      toast.error('No internet connection. Please check your network.');
+      toast.error('No internet connection. Please check your network and try again.');
     } else {
-      toast.error(apiError.message);
+      // Use the utility function for consistent error handling
+      toast.error(getErrorMessage(error));
     }
 
     return Promise.reject(apiError);

@@ -21,9 +21,8 @@ class Settings(BaseSettings):
         "protectai/deberta-v3-base-prompt-injection-v2"
     )
     
-    # LLM Pool Configuration for Concurrent Processing
-    LLM_POOL_SIZE: int = 2  # Increased from 2 to 3 for better parallelism
-    LLM_BATCH_SIZE: int = 50  # Increased from 25 to 50 for 10 batches of 50 items
+    LLM_POOL_SIZE: int = 2  # Reduced from 3 for better stability
+    LLM_BATCH_SIZE: int = 25  # Reduced from 50 for better reliability
     LLM_BATCH_THRESHOLD: int = 15  # Use batch processing for counts > this value
     
     # LLM Generation Parameters for Stability

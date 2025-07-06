@@ -7,6 +7,7 @@ import { GenerationControls } from '@/components/GenerationControls';
 import { ResultsDisplay } from '@/components/ResultsDisplay';
 import { MockDataGeneratorAPI } from '@/services/api';
 import type { GenerationRequest, GenerateMockDataResponse, Template } from '@/types/api';
+import { getErrorMessage } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -55,7 +56,9 @@ const Index = () => {
         console.log('Backend is healthy');
       } catch (error) {
         console.warn('Backend health check failed:', error);
-        toast.error('Unable to connect to backend service');
+        // The specific error message is already handled by the API interceptor
+        // This is just a fallback for the health check
+        toast.error(getErrorMessage(error));
       }
     };
     
@@ -164,26 +167,12 @@ const Index = () => {
       
     } catch (error: unknown) {
       console.error('Generation failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to generate mock data';
-      toast.error(errorMessage);
+      // The specific error message is already handled by the API interceptor
+      // This is just a fallback for generation-specific errors
+      toast.error(getErrorMessage(error));
     } finally {
       setIsGenerating(false);
       setGenerationProgress(0);
-    }
-  };
-
-  const handleTemplateSelect = (template: Template) => {
-    setSelectedTemplate(template);
-    setJsonInput(JSON.stringify(template.example_data, null, 2));
-    toast.success(`Loaded template: ${template.name}`);
-  };
-
-  const handleCopyTemplate = async (template: Template) => {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(template.example_data, null, 2));
-      toast.success('Template copied to clipboard');
-    } catch (error) {
-      toast.error('Failed to copy template');
     }
   };
 
