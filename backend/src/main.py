@@ -11,7 +11,7 @@ from app.middlewares.rate_limit_middleware import RateLimitingMiddleware
 from app.middlewares.request_validation_middleware import (
     RequestValidationMiddleware,
 )
-from app.routers import generation_router
+from app.routers import generation_router, performance_router
 from app.services.cache_service import cache_service
 from app.services.moderation_service import moderation_service
 from app.services.llm_service import llm_service
@@ -73,6 +73,7 @@ app.add_middleware(RequestValidationMiddleware)
 
 # Include routers
 app.include_router(generation_router.router, prefix=settings.API_PREFIX)
+app.include_router(performance_router.router, prefix=settings.API_PREFIX)
 
 
 @app.get(f"{settings.API_PREFIX}/", tags=["Health Check"])

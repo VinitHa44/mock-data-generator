@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import pickle
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis.asyncio as redis
@@ -25,7 +24,6 @@ class CacheService:
         # Bloom filter for quick rejection
         self.bloom_filter = BloomFilter(capacity=1000000, error_rate=0.1)
         
-        # Initialize bloom filter synchronously during startup
         # Note: This should be called after the instance is created
         self._initialized = False
         
@@ -41,10 +39,7 @@ class CacheService:
             return
             
         try:
-            # Load bloom filter state first
-            await self.load_bloom_filter_state()
-            
-            # Then load existing hashes into bloom filter
+            # Load existing hashes into bloom filter
             await self.initialize_bloom_filter()
             
             self._initialized = True
@@ -64,27 +59,6 @@ class CacheService:
         except Exception as e:
             logger.error(f"Failed to initialize bloom filter: {e}")
             raise
-
-    async def save_bloom_filter_state(self):
-        """Save bloom filter state to disk"""
-        try:
-            with open(settings.BLOOM_FILTER_FILE, 'wb') as f:
-                pickle.dump(self.bloom_filter, f)
-            logger.info("Bloom filter state saved")
-        except Exception as e:
-            logger.error(f"Failed to save bloom filter state: {e}")
-
-    async def load_bloom_filter_state(self):
-        """Load bloom filter state from disk"""
-        try:
-            if os.path.exists(settings.BLOOM_FILTER_FILE):
-                with open(settings.BLOOM_FILTER_FILE, 'rb') as f:
-                    self.bloom_filter = pickle.load(f)
-                logger.info("Bloom filter state loaded from disk")
-        except Exception as e:
-            logger.error(f"Failed to load bloom filter state: {e}")
-
-
 
     async def get_partial_cache_hit(
         self, object_hashes: List[str], required_count: int
@@ -338,12 +312,8 @@ class CacheService:
             )
 
     async def shutdown(self):
-        """Cleanup method to save bloom filter state"""
-        try:
-            await self.save_bloom_filter_state()
-            logger.info("Cache service shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during cache service shutdown: {e}")
+        """Cleanup method, no-op for now as bloom filter state is ephemeral."""
+        logger.info("Cache service shutdown complete")
 
     async def cleanup_expired_entries(self):
         """

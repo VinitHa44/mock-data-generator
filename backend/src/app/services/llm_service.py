@@ -3,9 +3,10 @@ import functools
 import json
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import httpx
 
 from app.config.settings import settings
 from app.prompts.prompts import create_finetuned_prompt_content, get_system_prompt, get_grammar_rules
@@ -37,6 +38,10 @@ class LocalLLMService(LLMInterface):
     _model_pool = []
     _pool_size = 0
     _executor = None
+    _runpod_client_verified = None
+    _runpod_client_unverified = None
+    # Sequential mode attributes
+    _sequential_llm = None
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -50,7 +55,17 @@ class LocalLLMService(LLMInterface):
             with self._lock:
                 if not hasattr(self, '_initialized'):
                     self._pool_size = getattr(settings, 'LLM_POOL_SIZE', 3)
-                    self._executor = ThreadPoolExecutor(max_workers=self._pool_size)
+                    
+                    # Only initialize ThreadPoolExecutor for local mode
+                    if settings.LLM_INFERENCE_MODE == 'local':
+                        self._executor = ThreadPoolExecutor(max_workers=self._pool_size) 
+                    
+                    if settings.LLM_INFERENCE_MODE == 'runpod':
+                        # Set a long timeout for the client, as RunPod jobs can take time
+                        # One client for verified, one for non-verified SSL
+                        self._runpod_client_verified = httpx.AsyncClient(timeout=600.0, verify=True)
+                        self._runpod_client_unverified = httpx.AsyncClient(timeout=600.0, verify=False)
+
                     self._initialized = True
 
     def _is_image_key(self, key: str) -> bool:
@@ -117,13 +132,14 @@ class LocalLLMService(LLMInterface):
                 )
             return array_rule_name
 
+        elif isinstance(value, bool):
+            # Enforce strict true/false for boolean values to avoid ambiguity (e.g., 1/0).
+            return "strict-boolean"
         elif isinstance(value, str):
             # All strings are handled by the 'string' rule now.
             return "string"
         elif isinstance(value, (int, float)):
             return "number"
-        elif isinstance(value, bool):
-            return "boolean"
         else:
             # Fallback for null or other unexpected types.
             return "null"
@@ -135,6 +151,9 @@ class LocalLLMService(LLMInterface):
         Dynamically creates a GBNF grammar string from a sample data object. This
         generates a structured and efficient grammar by creating named, reusable
         rules for objects and arrays, preventing massive, inline rule definitions.
+        
+        For large counts (>10), uses flexible grammar to prevent parser stack overflow
+        in local/runpod modes, but uses strict count in sequential mode.
         """
         rules = {}
         # Start building the grammar from the top-level 'item' structure.
@@ -143,10 +162,25 @@ class LocalLLMService(LLMInterface):
         )
 
         # Define the root of the grammar, which expects a 'data' array.
+        # Grammar strategy varies by inference mode
+        if count == 1:
+            data_array_rule = f'data-array ::= "[" ws {item_rule_name} ws "]"'
+        elif settings.LLM_INFERENCE_MODE == 'sequential':
+            # Sequential mode: Always use strict count enforcement (no parser stack overflow)
+            data_array_rule = f'data-array ::= "[" ws {item_rule_name} ("," ws {item_rule_name}){{{count - 1}}} ws "]"'
+            logger.debug(f"Using strict count grammar for sequential mode: {count}")
+        elif count <= 10:
+            # Use strict count enforcement for small counts in local/runpod modes
+            data_array_rule = f'data-array ::= "[" ws {item_rule_name} ("," ws {item_rule_name}){{{count - 1}}} ws "]"'
+        else:
+            # Use flexible grammar for large counts in local/runpod modes to prevent parser stack overflow
+            # This allows the model to generate a variable number of items
+            data_array_rule = f'data-array ::= "[" ws {item_rule_name} ("," ws {item_rule_name})* ws "]"'
+            logger.debug(f"Using flexible grammar for large count: {count}")
+
         root_and_data_array_rules = [
             'root ::= "{" ws "\\"data\\":" ws data-array "}"',
-            # This rule enforces the exact number of items requested.
-            f'data-array ::= "[" ws {item_rule_name} ("," ws {item_rule_name}){{{count - 1}}} ws "]"',
+            data_array_rule,
         ]
 
         # Define primitive types that form the building blocks of the JSON.
@@ -159,7 +193,7 @@ class LocalLLMService(LLMInterface):
         final_grammar = "\n".join(
             root_and_data_array_rules + list(rules.values()) + primitive_rules
         )
-        logger.debug(f"Generated GBNF Grammar:\n{final_grammar}")
+        logger.debug(f"Generated GBNF Grammar for count {count} (mode: {settings.LLM_INFERENCE_MODE}):\n{final_grammar}")
         return final_grammar
 
     def _create_llm_instance(self) -> Llama:
@@ -179,20 +213,37 @@ class LocalLLMService(LLMInterface):
         )
 
     async def initialize(self):
-        """Initialize the model pool with multiple instances."""
-        if not self._model_pool:
-            logger.info(f"Initializing LLM model pool with {self._pool_size} instances...")
-            
-            for i in range(self._pool_size):
+        """Initialize the model pool OR verify RunPod settings OR create sequential model."""
+        if settings.LLM_INFERENCE_MODE == 'local':
+            if not self._model_pool:
+                logger.info(f"Initializing LLM model pool with {self._pool_size} instances...")
+                
+                for i in range(self._pool_size):
+                    try:
+                        llm_instance = self._create_llm_instance()
+                        self._model_pool.append(llm_instance)
+                        logger.info(f"Created LLM instance {i+1}/{self._pool_size}")
+                    except Exception as e:
+                        logger.error(f"Failed to create LLM instance {i+1}: {e}")
+                        raise LLMGenerationError(f"Could not initialize LLM model pool: {e}")
+                
+                logger.info("LLM model pool initialized successfully")
+        elif settings.LLM_INFERENCE_MODE == 'sequential':
+            if self._sequential_llm is None:
+                logger.info("Initializing single LLM instance for sequential mode...")
                 try:
-                    llm_instance = self._create_llm_instance()
-                    self._model_pool.append(llm_instance)
-                    logger.info(f"Created LLM instance {i+1}/{self._pool_size}")
+                    self._sequential_llm = self._create_llm_instance()
+                    logger.info("Sequential LLM instance created successfully")
                 except Exception as e:
-                    logger.error(f"Failed to create LLM instance {i+1}: {e}")
-                    raise LLMGenerationError(f"Could not initialize LLM model pool: {e}")
-            
-            logger.info("LLM model pool initialized successfully")
+                    logger.error(f"Failed to create sequential LLM instance: {e}")
+                    raise LLMGenerationError(f"Could not initialize sequential LLM model: {e}")
+        elif settings.LLM_INFERENCE_MODE == 'runpod':
+            logger.info("LLM service is in 'runpod' mode. Verifying settings...")
+            if not all([settings.RUNPOD_ENDPOINT_ID, settings.RUNPOD_API_KEY]):
+                raise LLMGenerationError("RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY must be set in 'runpod' mode.")
+            logger.info("RunPod settings verified successfully.")
+        else:
+            raise LLMGenerationError(f"Invalid LLM_INFERENCE_MODE: '{settings.LLM_INFERENCE_MODE}'. Must be 'local', 'runpod', or 'sequential'.")
 
     def _get_available_model(self) -> Llama:
         """Get an available model from the pool (simple round-robin for now)."""
@@ -205,10 +256,14 @@ class LocalLLMService(LLMInterface):
         return model
 
     async def _run_generation_with_model(
-        self, llm_instance: Llama, input_data: List[Dict], count: int, enable_moderation: bool, temperature: float, max_tokens: int, top_p: float
-    ) -> List[Dict]:
+        self, llm_instance: Llama, input_data: List[Dict], count: int, enable_moderation: bool, temperature: float, max_tokens: int, top_p: float, context: str = "default", previous_instruction_index: int = None
+    ) -> tuple[List[Dict], int]:
         """Run generation with a specific model instance."""
-        prompt_content = create_finetuned_prompt_content(input_data, count)
+        # Reset the model state to ensure a clean generation, preventing
+        # context bleed from previous requests which can cause errors with strict grammars.
+        llm_instance.reset()
+        
+        prompt_content, instruction_index = create_finetuned_prompt_content(input_data, count, context, previous_instruction_index)
 
         # This system prompt must match the one used during fine-tuning
         # to properly activate the model's specialized knowledge.
@@ -233,7 +288,7 @@ class LocalLLMService(LLMInterface):
 
         # Set a reasonable max_tokens to prevent extremely large responses
         max_tokens = min(max_tokens, count * settings.MAX_TOKENS_PER_ITEM)  # Limit tokens based on count
-        logger.debug(f"Invoking GGUF model with GBNF grammar. Generating {count} items with max_tokens={max_tokens}, temperature={temperature}, top_p={top_p}.")
+        logger.debug(f"Invoking GGUF model with GBNF grammar. Generating {count} items with max_tokens={max_tokens}, temperature={temperature}, top_p={top_p}. Context: {context}, Instruction: {instruction_index}")
 
         try:
             loop = asyncio.get_running_loop()
@@ -264,7 +319,7 @@ class LocalLLMService(LLMInterface):
             if not parsed_output.get("data"):
                 self._save_debug_output(generated_text, count)
             
-            return parsed_output.get("data", [])
+            return parsed_output.get("data", []), instruction_index
 
         except Exception as e:
             logger.error(
@@ -273,6 +328,76 @@ class LocalLLMService(LLMInterface):
             raise LLMGenerationError(
                 f"Failed to generate mock data with GGUF model. Error: {e}"
             )
+
+    async def _run_generation_via_runpod(self, input_data: List[Dict], count: int, context: str = "default", previous_instruction_index: int = None) -> tuple[List[Dict], int]:
+        """Runs generation by calling the deployed RunPod serverless endpoint."""
+        async with PerformanceTracker("generation", count=count, method="runpod"):
+            prompt_content, instruction_index = create_finetuned_prompt_content(input_data, count, context, previous_instruction_index)
+            system_prompt = get_system_prompt()
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt_content},
+            ]
+
+            # Re-use your excellent grammar generation logic
+            gbnf_string = None
+            if input_data:
+                try:
+                    gbnf_string = self._create_gbnf_grammar_from_sample(input_data[0], count)
+                    logger.debug("Successfully created GBNF grammar for RunPod.")
+                except Exception as e:
+                    logger.warning(f"Could not create GBNF grammar for RunPod: {e}")
+            
+            # Construct the payload for our new RunPod handler
+            runpod_input = {
+                "messages": messages,
+                "max_tokens": min(settings.MAX_TOTAL_TOKENS, count * settings.MAX_TOKENS_PER_ITEM),
+                "temperature": settings.LLM_TEMPERATURE,
+                "top_p": settings.LLM_TOP_P,
+                "stop": ["<|im_end|>"],
+            }
+            if gbnf_string:
+                runpod_input["grammar"] = gbnf_string
+
+            payload = {"input": runpod_input}
+            headers = {"Authorization": f"Bearer {settings.RUNPOD_API_KEY}"}
+            endpoint_url = f"https://api.runpod.ai/v2/{settings.RUNPOD_ENDPOINT_ID}/runsync"
+            
+            logger.debug(f"Calling RunPod endpoint: {endpoint_url}. Context: {context}, Instruction: {instruction_index}")
+
+            try:
+                # Choose the appropriate client based on SSL verification settings
+                client = self._runpod_client_verified
+                if any(domain in endpoint_url.lower() for domain in settings.DISABLE_SSL_DOMAINS):
+                    client = self._runpod_client_unverified
+                    logger.info(f"Disabling SSL verification for problematic domain: {endpoint_url}")
+
+                response = await client.post(endpoint_url, json=payload, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                
+                if result.get("status") == "COMPLETED":
+                    # The response from the OAI-compatible endpoint is nested
+                    generated_text = result.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if not generated_text:
+                         logger.error("RunPod returned a completed status but with no content.", extra={"runpod_result": result})
+                         self._save_debug_output(json.dumps(result), count)
+                         return [], instruction_index
+
+                    # Re-use your excellent JSON parsing and cleaning logic
+                    return self._parse_and_clean_json(generated_text).get("data", []), instruction_index
+                else:
+                    error_detail = result.get('output', {}).get('error', str(result))
+                    logger.error("RunPod job did not complete successfully.", extra={"runpod_result": result})
+                    raise LLMGenerationError(f"RunPod job failed with status: {result.get('status')}. Details: {error_detail}")
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error calling RunPod: {e.response.status_code}", extra={"response": e.response.text})
+                raise LLMGenerationError(f"Failed to get response from RunPod: {e}")
+            except Exception as e:
+                logger.error("Error during RunPod API call", error=str(e), exc_info=True)
+                raise LLMGenerationError(f"Failed to generate mock data with RunPod. Error: {e}")
 
     def _handle_large_response(self, text: str) -> str:
         """Handle large responses that might be truncated."""
@@ -603,20 +728,43 @@ class LocalLLMService(LLMInterface):
         enable_moderation: bool = True,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        top_p: float = 0.9
-    ) -> List[Dict]:
+        top_p: float = 0.9,
+        context: str = "default",
+        previous_instruction_index: Optional[int] = None
+    ) -> tuple[List[Dict], int]:
         async with PerformanceTracker("generation", count=count, method="single"):
             await self.initialize()
-            llm_instance = self._get_available_model()
-            return await self._run_generation_with_model(
-                llm_instance, 
-                input_data, 
-                count,
-                enable_moderation,
-                temperature,
-                max_tokens,
-                top_p
-            )
+            
+            logger.info(f"_run_generation called with mode: {settings.LLM_INFERENCE_MODE}, count: {count}")
+            
+            if settings.LLM_INFERENCE_MODE == 'sequential':
+                # Sequential mode: Use direct generation without threading
+                logger.info("Routing to sequential generation")
+                return await self._run_generation_sequential(
+                    input_data, 
+                    count,
+                    enable_moderation,
+                    temperature,
+                    max_tokens,
+                    top_p,
+                    context,
+                    previous_instruction_index
+                )
+            else:
+                # Local mode: Use threaded generation with model pool
+                logger.info("Routing to threaded generation with model pool")
+                llm_instance = self._get_available_model()
+                return await self._run_generation_with_model(
+                    llm_instance, 
+                    input_data, 
+                    count,
+                    enable_moderation,
+                    temperature,
+                    max_tokens,
+                    top_p,
+                    context,
+                    previous_instruction_index
+                )
 
     async def generate_mock_data_batch(
         self, 
@@ -640,7 +788,8 @@ class LocalLLMService(LLMInterface):
             
             if total_count <= batch_size:
                 # For small counts, use single generation
-                return await self._run_generation(input_data, total_count, enable_moderation, temperature, max_tokens, top_p)
+                result, _ = await self._run_generation(input_data, total_count, enable_moderation, temperature, max_tokens, top_p)
+                return result
             
             # Try with the specified batch size first
             result = await self._try_batch_generation(input_data, total_count, batch_size, enable_moderation, temperature, max_tokens, top_p)
@@ -673,7 +822,7 @@ class LocalLLMService(LLMInterface):
         
         logger.info(f"Generating {total_count} items in {num_batches} batches of {batch_size}")
         
-        # Create tasks for parallel execution
+        # Create tasks for parallel execution with different instructions
         tasks = []
         for i in range(num_batches):
             current_batch_size = min(batch_size, remaining_count)
@@ -682,8 +831,17 @@ class LocalLLMService(LLMInterface):
             # Get a model instance for this batch
             llm_instance = self._get_available_model()
             
-            # Create task for this batch
-            task = self._run_generation_with_model(llm_instance, input_data, current_batch_size, enable_moderation, temperature, max_tokens, top_p)
+            # Use "parallel" context to ensure each batch gets a different instruction
+            task = self._run_generation_with_model(
+                llm_instance, 
+                input_data, 
+                current_batch_size, 
+                enable_moderation, 
+                temperature, 
+                max_tokens, 
+                top_p,
+                context="parallel"
+            )
             tasks.append(task)
         
         # Execute all batches in parallel with error handling
@@ -698,7 +856,9 @@ class LocalLLMService(LLMInterface):
                 logger.error(f"Batch {i+1} failed: {result}")
                 failed_batches.append(i)
             else:
-                all_data.extend(result)
+                # result is now a tuple (data, instruction_index)
+                data, instruction_index = result
+                all_data.extend(data)
         
         # Retry failed batches with exponential backoff
         if failed_batches:
@@ -726,6 +886,7 @@ class LocalLLMService(LLMInterface):
         """Retry a failed batch with exponential backoff."""
         max_retries = settings.LLM_RETRY_ATTEMPTS
         base_delay = 1.0
+        previous_instruction_index = None
         
         for retry in range(max_retries):
             try:
@@ -735,12 +896,26 @@ class LocalLLMService(LLMInterface):
                 await asyncio.sleep(delay)
                 
                 llm_instance = self._get_available_model()
-                result = await self._run_generation_with_model(llm_instance, input_data, batch_size, enable_moderation, temperature, max_tokens, top_p)
+                # Use "retry" context to ensure different instruction on each retry
+                result, instruction_index = await self._run_generation_with_model(
+                    llm_instance, 
+                    input_data, 
+                    batch_size, 
+                    enable_moderation, 
+                    temperature, 
+                    max_tokens, 
+                    top_p,
+                    context="retry",
+                    previous_instruction_index=previous_instruction_index
+                )
                 
                 if result:
                     all_data.extend(result)
                     logger.info(f"Batch {batch_idx + 1} succeeded on retry {retry + 1}")
                     return True
+                
+                # Update previous instruction index for next retry
+                previous_instruction_index = instruction_index
                     
             except Exception as e:
                 logger.error(f"Batch {batch_idx + 1} retry {retry + 1} failed: {e}")
@@ -754,17 +929,42 @@ class LocalLLMService(LLMInterface):
         enable_moderation: bool = True,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        top_p: float = 0.9
+        top_p: float = 0.9,
+        context: str = "default",
+        previous_instruction_index: Optional[int] = None
     ) -> List[Dict]:
         """
         Main entry point for data generation.
-        Automatically chooses between single generation and batch generation based on count.
+        Automatically chooses between local, runpod, and sequential generation based on config.
         """
-        # Use batch generation for counts > threshold for better performance
-        if count > settings.LLM_BATCH_THRESHOLD:
-            return await self._adaptive_batch_generation(input_data, count, enable_moderation, temperature, max_tokens, top_p)
-        else:
-            return await self._run_generation(input_data, count)
+        await self.initialize()
+        
+        logger.info(
+            f"LLM_INFERENCE_MODE: {settings.LLM_INFERENCE_MODE}, count: {count}, context: {context}"
+        )
+
+        # Special handling for retries in 'local' mode to be sequential
+        if settings.LLM_INFERENCE_MODE == "local" and context == "retry":
+            logger.info("Local mode retry detected. Using sequential generation for this attempt.")
+            result, _ = await self._run_generation(input_data, count, enable_moderation, temperature, max_tokens, top_p, context, previous_instruction_index)
+            return result
+
+        # Standard routing for all other cases
+        if settings.LLM_INFERENCE_MODE == 'runpod':
+            logger.info("Using RunPod mode")
+            result, _ = await self._run_generation_via_runpod(input_data, count, context, previous_instruction_index)
+            return result
+        elif settings.LLM_INFERENCE_MODE == 'sequential':
+            logger.info("Using sequential mode - bypassing all batch processing")
+            result, _ = await self._run_generation(input_data, count, enable_moderation, temperature, max_tokens, top_p, context, previous_instruction_index)
+            return result
+        else: # 'local' mode for initial generation
+            logger.info(f"Using local mode - batch threshold: {settings.LLM_BATCH_THRESHOLD}")
+            if count > settings.LLM_BATCH_THRESHOLD:
+                return await self._adaptive_batch_generation(input_data, count, enable_moderation, temperature, max_tokens, top_p)
+            else:
+                result, _ = await self._run_generation(input_data, count, enable_moderation, temperature, max_tokens, top_p, context, previous_instruction_index)
+                return result
 
     async def _adaptive_batch_generation(
         self, 
@@ -800,7 +1000,8 @@ class LocalLLMService(LLMInterface):
         # If all batch sizes fail, try single generation for smaller counts
         logger.warning("All batch sizes failed, trying single generation")
         if total_count <= 10:
-            return await self._run_generation(input_data, total_count, enable_moderation, temperature, max_tokens, top_p)
+            result, _ = await self._run_generation(input_data, total_count, enable_moderation, temperature, max_tokens, top_p, context="retry")
+            return result
         else:
             # Try generating in smaller chunks
             chunks = []
@@ -809,7 +1010,7 @@ class LocalLLMService(LLMInterface):
             while remaining > 0:
                 chunk_size = min(10, remaining)  # Increased from 5 to 10 for better efficiency
                 try:
-                    chunk = await self._run_generation(input_data, chunk_size, enable_moderation, temperature, max_tokens, top_p)
+                    chunk, _ = await self._run_generation(input_data, chunk_size, enable_moderation, temperature, max_tokens, top_p, context="retry")
                     chunks.extend(chunk)
                     remaining -= len(chunk)
                 except Exception as e:
@@ -818,12 +1019,96 @@ class LocalLLMService(LLMInterface):
             
             return chunks[:total_count]
 
+    async def _run_generation_sequential(
+        self, input_data: List[Dict], count: int, enable_moderation: bool, temperature: float, max_tokens: int, top_p: float, context: str = "default", previous_instruction_index: int = None
+    ) -> tuple[List[Dict], int]:
+        """Run generation in sequential mode with a single model instance, no threading."""
+        if self._sequential_llm is None:
+            raise LLMGenerationError("Sequential LLM not initialized")
+        
+        prompt_content, instruction_index = create_finetuned_prompt_content(input_data, count, context, previous_instruction_index)
+
+        # This system prompt must match the one used during fine-tuning
+        # to properly activate the model's specialized knowledge.
+        system_prompt = get_system_prompt()
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt_content},
+        ]
+
+        grammar = None
+        if input_data:
+            try:
+                # Use the new, robust GBNF grammar generation with strict count enforcement
+                gbnf_string = self._create_gbnf_grammar_from_sample(
+                    input_data[0], count
+                )
+                grammar = LlamaGrammar.from_string(gbnf_string, verbose=False)
+                logger.debug("Successfully created GBNF grammar for sequential mode.")
+            except Exception as e:
+                logger.warning(f"Could not create GBNF grammar for sequential mode: {e}")
+
+        # Set a reasonable max_tokens to prevent extremely large responses
+        max_tokens = min(max_tokens, count * settings.MAX_TOKENS_PER_ITEM)  # Limit tokens based on count
+        logger.debug(f"Invoking sequential GGUF model with GBNF grammar. Generating {count} items with max_tokens={max_tokens}, temperature={temperature}, top_p={top_p}. Context: {context}, Instruction: {instruction_index}")
+
+        try:
+            # Direct call without ThreadPoolExecutor - this is the key difference
+            output = self._sequential_llm.create_chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop=["<|im_end|>"],
+                grammar=grammar,
+            )
+
+            generated_text = output["choices"][0]["message"]["content"].strip()
+
+            # Check for truncation issues
+            if len(generated_text) > settings.LARGE_RESPONSE_THRESHOLD:  # Large response threshold
+                logger.warning(f"Large response detected ({len(generated_text)} chars), checking for truncation")
+                generated_text = self._handle_large_response(generated_text)
+
+            # Clean and parse the generated text
+            parsed_output = self._parse_and_clean_json(generated_text)
+            
+            # If parsing failed completely, save the raw output for debugging
+            if not parsed_output.get("data"):
+                self._save_debug_output(generated_text, count)
+            
+            return parsed_output.get("data", []), instruction_index
+
+        except Exception as e:
+            logger.error(
+                "Error during sequential Llama.cpp generation", error=str(e), exc_info=True
+            )
+            raise LLMGenerationError(
+                f"Failed to generate mock data with sequential GGUF model. Error: {e}"
+            )
+
     async def shutdown(self):
         """Clean up resources."""
         if self._executor:
             self._executor.shutdown(wait=True)
+        if self._runpod_client_verified:
+            await self._runpod_client_verified.aclose()
+        if self._runpod_client_unverified:
+            await self._runpod_client_unverified.aclose()
         self._model_pool.clear()
+        # Clean up sequential model
+        if self._sequential_llm:
+            self._sequential_llm = None
         logger.info("LLM service shutdown complete")
+    
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton instance to force fresh initialization."""
+        with cls._lock:
+            if cls._instance:
+                logger.info("Resetting LLM service singleton instance")
+                cls._instance = None
 
 
 llm_service = LocalLLMService()

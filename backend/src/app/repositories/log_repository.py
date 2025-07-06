@@ -1,6 +1,6 @@
 from datetime import datetime
 
-import pymongo
+import motor.motor_asyncio
 from app.config.settings import settings
 from app.utils.logging_config import get_logger
 from pymongo.errors import ConnectionFailure
@@ -11,14 +11,12 @@ logger = get_logger(__name__)
 class LogRepository:
     def __init__(self, mongo_uri: str, db_name: str):
         try:
-            self.client = pymongo.MongoClient(mongo_uri)
-            # The ismaster command is cheap and does not require auth.
-            self.client.admin.command("ismaster")
+            self.client = motor.motor_asyncio.AsyncIOMotorClient(mongo_uri)
             self.db = self.client[db_name]
             self.token_log_collection = self.db["token_logs"]
-            logger.info("MongoDB connection successful.")
-        except ConnectionFailure as e:
-            logger.error("Could not connect to MongoDB", error=str(e))
+            logger.info("MongoDB client initialized, connection will be established on first use.")
+        except Exception as e:
+            logger.error("Could not initialize MongoDB client", error=str(e))
             self.client = None
             self.db = None
 
@@ -47,7 +45,7 @@ class LogRepository:
             "timestamp": datetime.utcnow(),
         }
         try:
-            self.token_log_collection.insert_one(log_entry)
+            await self.token_log_collection.insert_one(log_entry)
             logger.info("Logged token usage to MongoDB", request_id=request_id)
         except Exception as e:
             logger.error("Failed to log token usage to MongoDB", error=str(e))

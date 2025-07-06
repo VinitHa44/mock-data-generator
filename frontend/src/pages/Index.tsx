@@ -103,9 +103,18 @@ const Index = () => {
     try {
       const inputData = JSON.parse(inputToUse);
       
-      // Ensure inputData is an array
-      const exampleArray = Array.isArray(inputData) ? inputData : [inputData];
+      // ** NEW: Validate that input is a non-empty array of objects **
+      if (!Array.isArray(inputData) || inputData.length === 0) {
+        toast.error('Input must be a non-empty array of objects.');
+        return;
+      }
       
+      // Ensure all items in the array are objects
+      if (inputData.some(item => typeof item !== 'object' || item === null || Array.isArray(item))) {
+          toast.error('All items in the array must be objects.');
+          return;
+      }
+
       setIsGenerating(true);
       setGenerationProgress(0);
       
@@ -119,7 +128,7 @@ const Index = () => {
       
       // Use the same API call format as working frontend
       const response = await MockDataGeneratorAPI.generateMockData(
-        exampleArray, 
+        inputData, 
         params.count,
         {
           enable_moderation: params.enable_moderation,

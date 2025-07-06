@@ -13,11 +13,3 @@ router.add_api_route(
     tags=["Data Generation"],
     summary="Generate Mock Data",
 )
-
-router.add_api_route(
-    "/performance",
-    generation_controller.get_performance_metrics,
-    methods=["GET"],
-    tags=["Performance"],
-    summary="Get Performance Metrics",
-)

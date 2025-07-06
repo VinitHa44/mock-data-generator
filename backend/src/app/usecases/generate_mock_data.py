@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Tuple
 from app.config.settings import settings
 from app.repositories.log_repository import log_repository
 from app.services.cache_service import cache_service
-from app.services.id_generation_service import IdGenerationService
 from app.services.id_processing_service import id_processing_service
 from app.services.image_enrichment_service import image_enrichment_service
 from app.services.image_key_analyzer_service import image_key_analyzer_service
@@ -21,7 +20,7 @@ logger = get_logger(__name__)
 class GenerateMockDataUsecase:
 
     def __init__(self):
-        self.id_generation_service = IdGenerationService()
+        pass
 
     def _save_intermediate_step(
         self, data: Any, file_prefix: str, request_id: str
@@ -40,61 +39,91 @@ class GenerateMockDataUsecase:
                 "Failed to save intermediate step", path=path, error=str(e)
             )
 
-    def _detect_copying(self, generated_data: List[Dict], input_examples: List[Dict]) -> bool:
+    def _is_structurally_valid(self, reference_obj: Any, target_obj: Any) -> bool:
+        """Recursively checks if target_obj has the same structure (keys and value types) as reference_obj."""
+        if type(reference_obj) != type(target_obj):
+            return False
+
+        if isinstance(reference_obj, dict):
+            if set(reference_obj.keys()) != set(target_obj.keys()):
+                return False
+            return all(self._is_structurally_valid(reference_obj[k], target_obj[k]) for k in reference_obj)
+
+        if isinstance(reference_obj, list):
+            if not reference_obj:
+                return not target_obj
+            if not target_obj:
+                return False
+            return self._is_structurally_valid(reference_obj[0], target_obj[0])
+        
+        return True
+
+    def _validate_and_filter_by_schema(
+        self,
+        generated_data: List[Dict],
+        reference_schema: Dict
+    ) -> List[Dict]:
         """
-        Enhanced detection of copying behavior from LLM.
-        Checks for exact matches, partial copying, and very similar content.
+        Validates that each object in generated_data conforms to the schema of reference_schema.
+        """
+        if not generated_data or not reference_schema:
+            return generated_data
+
+        valid_items = []
+        for item in generated_data:
+            if self._is_structurally_valid(reference_schema, item):
+                valid_items.append(item)
+            else:
+                logger.warning(
+                    "Discarding object due to schema mismatch with input example.",
+                    item=item
+                )
+
+        if len(valid_items) < len(generated_data):
+            logger.info(
+                "Filtered out objects that did not conform to the input schema.",
+                original_count=len(generated_data),
+                filtered_count=len(valid_items)
+            )
+
+        return valid_items
+
+    def _filter_copied_data(self, generated_data: List[Dict], input_examples: List[Dict]) -> List[Dict]:
+        """
+        Filters out copied or very similar data from the generated list.
+        Returns a list of items that are considered original.
         """
         if not generated_data or not input_examples:
-            return False
+            return generated_data
             
-        # Check for exact matches first
+        original_items = []
         for gen_item in generated_data:
+            is_copy = False
+            # Check for exact matches
             if gen_item in input_examples:
-                logger.debug("Found exact copy of input example")
-                return True
-        
-        # Check for partial copying (same values in key fields)
-        for gen_item in generated_data:
-            for input_item in input_examples:
-                # Check if key string fields are identical
-                for key, value in gen_item.items():
-                    if isinstance(value, str) and key in input_item:
-                        if value == input_item[key]:
-                            logger.debug(f"Found copied value '{value}' in field '{key}'")
-                            return True
-                
-                # Check if lists/arrays are identical
-                for key, value in gen_item.items():
-                    if isinstance(value, list) and key in input_item:
-                        if value == input_item[key]:
-                            logger.debug(f"Found copied list '{value}' in field '{key}'")
-                            return True
-        
-        # Check if all generated items are very similar to input examples
-        # (e.g., same structure but with minor variations)
-        if len(generated_data) == len(input_examples):
-            similar_count = 0
-            for gen_item in generated_data:
+                is_copy = True
+            else:
+                # If no exact match, check for partial copying
                 for input_item in input_examples:
-                    # Check if most fields match
-                    matching_fields = 0
-                    total_fields = 0
-                    for key in gen_item.keys():
-                        if key in input_item:
-                            total_fields += 1
-                            if gen_item[key] == input_item[key]:
-                                matching_fields += 1
-                    
-                    if total_fields > 0 and matching_fields / total_fields > 0.8:
-                        similar_count += 1
+                    # Check if key string or list fields are identical
+                    for key, value in gen_item.items():
+                        if isinstance(value, (str, list)) and key in input_item and value == input_item[key]:
+                            is_copy = True
+                            break
+                    if is_copy:
                         break
             
-            if similar_count >= len(generated_data) * 0.8:
-                logger.debug("Found mostly similar items to input examples")
-                return True
-        
-        return False
+            if not is_copy:
+                original_items.append(gen_item)
+
+        if len(original_items) < len(generated_data):
+            logger.warning(
+                "Filtered out copied or very similar data to input examples.",
+                original_count=len(generated_data),
+                filtered_count=len(original_items)
+            )
+            
+        return original_items
 
     async def _generate_and_validate_data(
         self, 
@@ -104,15 +133,16 @@ class GenerateMockDataUsecase:
         enable_moderation: bool = True,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        top_p: float = 0.9
+        top_p: float = 0.9,
+        context: str = "default"
     ) -> List[Dict]:
         """
-        Generates data and ensures the count is correct, using an intelligent retry loop
-        as a fallback if the LLM doesn't return the exact count requested.
+        Generate and validate mock data with retry logic and instruction variation.
         """
         total_generated_data = []
         attempts = 0
         max_attempts = settings.MAX_GENERATION_ATTEMPTS
+        previous_instruction_index = None
 
         while len(total_generated_data) < count and attempts < max_attempts:
             remaining_count = count - len(total_generated_data)
@@ -123,6 +153,9 @@ class GenerateMockDataUsecase:
                 items_to_generate=remaining_count,
             )
 
+            # Determine context for this attempt
+            attempt_context = "retry" if attempts > 0 else context
+
             # Use batch generation for better performance with large counts
             generated_data = await llm_service.generate_mock_data(
                 input_examples, 
@@ -130,7 +163,9 @@ class GenerateMockDataUsecase:
                 enable_moderation,
                 temperature,
                 max_tokens,
-                top_p
+                top_p,
+                context=attempt_context,
+                previous_instruction_index=previous_instruction_index
             )
             self._save_intermediate_step(
                 generated_data, f"llm_response_attempt_{attempts+1}", request_id
@@ -144,21 +179,22 @@ class GenerateMockDataUsecase:
                 attempts += 1
                 continue
 
-            # **Enhanced Validation Step**: Check if the LLM is copying the input
-            is_copy = self._detect_copying(generated_data, input_examples)
+            # **Enhanced Validation Step**: Filter out items that are copies of the input
+            original_data = self._filter_copied_data(generated_data, input_examples)
             
-            if is_copy:
+            if not original_data and generated_data:
+                # If all items were filtered, it's a sign of a major copying issue, treat as a failed attempt.
                 logger.warning(
-                    "LLM returned copied or very similar data to input examples. Discarding and retrying.",
+                    "LLM returned only copied data. Discarding and retrying.",
                     attempt=attempts + 1,
                 )
                 attempts += 1
                 continue
 
-            total_generated_data.extend(generated_data)
+            total_generated_data.extend(original_data)
             logger.info(
                 "Data generation attempt complete.",
-                items_generated_this_attempt=len(generated_data),
+                items_generated_this_attempt=len(original_data),
                 total_items_so_far=len(total_generated_data),
             )
             attempts += 1
@@ -177,7 +213,7 @@ class GenerateMockDataUsecase:
         # Ensure we don't return more than requested
         return total_generated_data[:count]
 
-    async def _generate_ids_async(self, count: int, original_examples: List[Dict]) -> List[Dict]:
+    async def _generate_ids_async(self, count: int, original_examples: List[Dict], existing_data: List[Dict] = None) -> List[Dict]:
         """Generate IDs asynchronously for the specified count."""
         # Run ID generation in a thread pool since it's CPU-bound
         loop = asyncio.get_running_loop()
@@ -185,7 +221,8 @@ class GenerateMockDataUsecase:
             None, 
             id_processing_service.generate_ids_for_count, 
             count, 
-            original_examples
+            original_examples,
+            existing_data
         )
 
     async def execute(
@@ -193,7 +230,7 @@ class GenerateMockDataUsecase:
         input_examples: List[Dict], 
         count: int,
         enable_moderation: bool = True,
-        temperature: float = 0.7,
+        temperature: float = 0.85,
         max_tokens: int = 2048,
         top_p: float = 0.9,
         cache_expiration: bool = False
@@ -216,13 +253,14 @@ class GenerateMockDataUsecase:
             logger.info(
                 "Full response served from cache.", request_id=request_id
             )
+            validated_data = self._validate_and_filter_by_schema(cached_data, input_examples[0])
             cache_info = {
-                "cachedCount": len(cached_data),
+                "cachedCount": len(validated_data),
                 "generatedCount": 0,
-                "totalCount": len(cached_data),
+                "totalCount": len(validated_data),
                 "cacheHitType": "full"
             }
-            return (cached_data, True, cache_info)
+            return (validated_data, True, cache_info)
         
         elif cached_data and remaining_count > 0:
             # Partial cache hit - we have some data, need to generate the rest
@@ -231,23 +269,46 @@ class GenerateMockDataUsecase:
                 request_id=request_id,
             )
             
-            # Generate only the remaining count needed
-            additional_data = await self._generate_remaining_data(
-                input_examples, remaining_count, request_id, cached_data, enable_moderation, temperature, max_tokens, top_p
+            # Generate only the remaining count needed, aware of existing data
+            # 2a. Remove IDs from input examples before sending to LLM
+            cleaned_input_examples = id_processing_service.remove_ids_from_input(input_examples)
+            
+            # 2b. Generate IDs in parallel with LLM generation, avoiding collisions with cached data
+            llm_task = self._generate_and_validate_data(cleaned_input_examples, remaining_count, request_id, enable_moderation, temperature, max_tokens, top_p, context="cache")
+            id_task = asyncio.create_task(self._generate_ids_async(remaining_count, input_examples, existing_data=cached_data))
+            
+            # Wait for both tasks to complete
+            raw_additional_data, id_objects = await asyncio.gather(llm_task, id_task)
+
+            # 2c. Combine LLM response with generated IDs, preserving field order
+            additional_data = id_processing_service.combine_llm_response_with_ids(
+                raw_additional_data, id_objects, input_examples[0]
+            )
+
+            # Enrich the additional data
+            all_data_for_analysis = cached_data + additional_data
+            confirmed_image_keys = image_key_analyzer_service.identify_image_keys(
+                input_examples, all_data_for_analysis
+            )
+            enriched_additional_data = await image_enrichment_service.enrich_mock_data(
+                additional_data, confirmed_keys=confirmed_image_keys
             )
             
             # Combine cached and new data
-            final_mock_data = cached_data + additional_data
+            final_mock_data = cached_data + enriched_additional_data
             
+            # Validate the final combined list against the input schema
+            validated_data = self._validate_and_filter_by_schema(final_mock_data, input_examples[0])
+
             # Update the existing cache group with the new combined data
             if group_id:
                 await cache_service.update_existing_group_cache(
-                    group_id, object_hashes, final_mock_data, cache_expiration
+                    group_id, object_hashes, validated_data, cache_expiration
                 )
             else:
                 # Fallback: create new group if no group_id was returned
                 await cache_service.create_new_group_cache(
-                    object_hashes, final_mock_data, cache_expiration
+                    object_hashes, validated_data, cache_expiration
                 )
             
             # Log token usage for the additional generation only
@@ -257,13 +318,18 @@ class GenerateMockDataUsecase:
                 request_id, input_tokens, output_tokens, "LocalSmolLM"
             )
             
+            # Recalculate counts based on validated data
+            # Note: This is an approximation as we can't perfectly distinguish validated cached vs generated items.
+            final_cached_count = min(len(cached_data), len(validated_data))
+            final_generated_count = len(validated_data) - final_cached_count
+
             cache_info = {
-                "cachedCount": len(cached_data),
-                "generatedCount": len(additional_data),
-                "totalCount": len(final_mock_data),
+                "cachedCount": final_cached_count,
+                "generatedCount": final_generated_count,
+                "totalCount": len(validated_data),
                 "cacheHitType": "partial"
             }
-            return (final_mock_data, False, cache_info)  # False because we generated some new data
+            return (validated_data, False, cache_info)
 
         # 2. No cache hit - generate everything from scratch
         logger.info(
@@ -281,15 +347,15 @@ class GenerateMockDataUsecase:
         )
         
         # Create tasks for parallel execution
-        llm_task = self._generate_and_validate_data(cleaned_input_examples, count, request_id, enable_moderation, temperature, max_tokens, top_p)
+        llm_task = self._generate_and_validate_data(cleaned_input_examples, count, request_id, enable_moderation, temperature, max_tokens, top_p, context="default")
         id_task = asyncio.create_task(self._generate_ids_async(count, input_examples))
         
         # Wait for both tasks to complete
         raw_mock_data, id_objects = await asyncio.gather(llm_task, id_task)
         
-        # 2c. Combine LLM response with generated IDs
+        # 2c. Combine LLM response with generated IDs, preserving field order
         processed_data = id_processing_service.combine_llm_response_with_ids(
-            raw_mock_data, id_objects
+            raw_mock_data, id_objects, input_examples[0]
         )
 
         # 3. Analyze and identify image keys
@@ -322,105 +388,32 @@ class GenerateMockDataUsecase:
             processed_data, confirmed_keys=confirmed_image_keys
         )
 
+        # ** NEW: Validate final data against input schema **
+        validated_data = self._validate_and_filter_by_schema(final_mock_data, input_examples[0])
+
         self._save_intermediate_step(
-            final_mock_data, "final_response", request_id
+            validated_data, "final_response", request_id
         )
 
         # 5. Cache the new data
         await cache_service.create_new_group_cache(
-            object_hashes, final_mock_data, cache_expiration
+            object_hashes, validated_data, cache_expiration
         )
 
         # 6. Log token usage (simplified)
         input_tokens = len(json.dumps(input_examples)) // 2
-        output_tokens = len(json.dumps(final_mock_data)) // 2
+        output_tokens = len(json.dumps(validated_data)) // 2
         await log_repository.log_token_usage(
             request_id, input_tokens, output_tokens, "LocalSmolLM"
         )
 
         cache_info = {
             "cachedCount": 0,
-            "generatedCount": len(final_mock_data),
-            "totalCount": len(final_mock_data),
+            "generatedCount": len(validated_data),
+            "totalCount": len(validated_data),
             "cacheHitType": "none"
         }
-        return (final_mock_data, False, cache_info)
-
-    async def _generate_remaining_data(
-        self, 
-        input_examples: List[Dict], 
-        remaining_count: int, 
-        request_id: str, 
-        existing_data: List[Dict],
-        enable_moderation: bool = True,
-        temperature: float = 0.7,
-        max_tokens: int = 2048,
-        top_p: float = 0.9
-    ) -> List[Dict]:
-        """
-        Generate only the remaining count of data items needed.
-        This method is optimized for partial cache hits.
-        """
-        logger.info(
-            f"Generating remaining {remaining_count} items for partial cache hit",
-            request_id=request_id,
-        )
-        
-        # Remove IDs from input examples before sending to LLM
-        cleaned_input_examples = id_processing_service.remove_ids_from_input(input_examples)
-        
-        # Generate IDs in parallel with LLM generation
-        llm_task = self._generate_and_validate_data(cleaned_input_examples, remaining_count, request_id, enable_moderation, temperature, max_tokens, top_p)
-        id_task = asyncio.create_task(self._generate_ids_async(remaining_count, input_examples))
-        
-        # Wait for both tasks to complete
-        raw_additional_data, id_objects = await asyncio.gather(llm_task, id_task)
-        
-        logger.info(
-            "Combining additional LLM response with generated IDs",
-            request_id=request_id,
-        )
-        
-        processed_additional_data = id_processing_service.combine_llm_response_with_ids(
-            raw_additional_data, id_objects
-        )
-
-        # Analyze and identify image keys (using existing data as reference)
-        if not processed_additional_data:
-            raise LLMGenerationError(
-                "Failed to generate any additional data from the LLM."
-            )
-
-        logger.info(
-            "Starting image key analysis for additional data.",
-            request_id=request_id,
-        )
-        
-        # Use existing data to help identify image keys
-        all_data_for_analysis = existing_data + processed_additional_data
-        confirmed_image_keys = image_key_analyzer_service.identify_image_keys(
-            input_examples, all_data_for_analysis
-        )
-        
-        logger.info(
-            f"Identified {len(confirmed_image_keys)} confirmed image keys for additional data enrichment.",
-            request_id=request_id,
-        )
-
-        # Enrich the additional data with image URLs
-        logger.info(
-            "Starting image URL enrichment for additional data.",
-            request_id=request_id,
-        )
-        enriched_additional_data = await image_enrichment_service.enrich_mock_data(
-            processed_additional_data, confirmed_keys=confirmed_image_keys
-        )
-
-        self._save_intermediate_step(
-            enriched_additional_data, f"additional_data_{request_id}", request_id
-        )
-
-        return enriched_additional_data
+        return (validated_data, False, cache_info)
 
 
 generate_mock_data_usecase = GenerateMockDataUsecase()

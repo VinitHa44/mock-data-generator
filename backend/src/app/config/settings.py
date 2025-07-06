@@ -15,12 +15,16 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api"
 
     # LLM and Model Settings
-    GGUF_MODEL_PATH: str = "../model/phi35-finetuned-Q4_K_M(1).gguf"
+    GGUF_MODEL_PATH: str = "model/phi35-finetuned-Q4_K_M.gguf"
     MODERATION_MODEL: str = "KoalaAI/Text-Moderation"
     PROMPT_INJECTION_MODEL: str = (
         "protectai/deberta-v3-base-prompt-injection-v2"
     )
+    LLM_INFERENCE_MODE: str = os.getenv("LLM_INFERENCE_MODE", "sequential")
+    RUNPOD_ENDPOINT_ID: str = os.getenv("RUNPOD_ENDPOINT_ID", "your-endpoint-id-here")
+    RUNPOD_API_KEY: str = os.getenv("RUNPOD_API_KEY", "your-api-key-here")
     
+    # LLM Inference Mode: 'local' (model pool + ThreadPoolExecutor), 'runpod' (serverless), 'sequential' (single model, no threading)
     LLM_POOL_SIZE: int = 2  # Reduced from 3 for better stability
     LLM_BATCH_SIZE: int = 25  # Reduced from 50 for better reliability
     LLM_BATCH_THRESHOLD: int = 15  # Use batch processing for counts > this value
@@ -124,10 +128,9 @@ class Settings(BaseSettings):
 
     # Debug Settings
     DEBUG_OUTPUT_DIR: str = "debug_outputs"
-    BLOOM_FILTER_FILE: str = "bloom_filter.pkl"
 
     # SSL Settings
-    DISABLE_SSL_DOMAINS: list = ["flickr.com", "staticflickr.com"]
+    DISABLE_SSL_DOMAINS: list = ["runpod.ai","flickr.com", "staticflickr.com"]
 
     class Config:
         case_sensitive = True
