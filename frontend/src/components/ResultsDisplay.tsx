@@ -49,7 +49,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
   isLoading
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'json'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'json'>('json');
   const [copied, setCopied] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<number | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
@@ -277,7 +277,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                   <TabsTrigger value="list" className="data-[state=active]:bg-brand-primary data-[state=active]:text-white">
                     <List className="w-4 h-4" />
                   </TabsTrigger>
-=                </TabsList>
+                </TabsList>
               </Tabs>
               
               <Button
